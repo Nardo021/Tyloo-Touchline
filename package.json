@@ -1,0 +1,27 @@
+{
+  "name": "tyloo-live",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Tyloo Live - local-first football match recorder for Tyloo FC",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @tyloo/shared && concurrently -n shared,api,web -c blue,green,magenta \"npm run dev -w @tyloo/shared\" \"npm run dev -w @tyloo/api\" \"npm run dev -w @tyloo/web\"",
+    "dev:api": "npm run build -w @tyloo/shared && npm run dev -w @tyloo/api",
+    "dev:web": "npm run dev -w @tyloo/web",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build -w @tyloo/shared && npm run build -w @tyloo/api && npm run build -w @tyloo/web",
+    "seed": "npm run seed -w @tyloo/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.2"
+  }
+}

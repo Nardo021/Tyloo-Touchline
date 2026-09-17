@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/dist
+.git
+coverage
+apps/api/data
+.env
+*.sqlite
+*.sqlite-*

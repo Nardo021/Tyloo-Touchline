@@ -1,0 +1,34 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      DATABASE_PATH: /data/tyloo-live.sqlite
+      APP_PIN: ${APP_PIN}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-90}
+      PIN_MAX_ATTEMPTS: ${PIN_MAX_ATTEMPTS:-5}
+      PIN_WINDOW_MS: ${PIN_WINDOW_MS:-900000}
+      TEAM_NAME: ${TEAM_NAME:-Tyloo FC}
+      SEED_ON_START: ${SEED_ON_START:-false}
+      TRUST_PROXY: "true"
+    volumes:
+      - tyloo-data:/data
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  tyloo-data:

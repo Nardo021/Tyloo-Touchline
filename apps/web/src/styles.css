@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: oklch(0.97 0.008 250);
+  --color-surface: oklch(0.995 0.002 250);
+  --color-text: oklch(0.2 0.03 250);
+  --color-text-muted: oklch(0.32 0.03 250);
+  --color-primary: oklch(0.27 0.06 250);
+  --color-primary-foreground: oklch(0.99 0.005 250);
+  --color-danger: oklch(0.45 0.18 25);
+  --color-danger-foreground: oklch(0.99 0.005 25);
+  --color-warning: oklch(0.5 0.14 70);
+  --color-success: oklch(0.42 0.11 155);
+  --color-border: oklch(0.72 0.02 250);
+  --color-focus: oklch(0.27 0.06 250);
+  --color-pressed: oklch(0.22 0.05 250);
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+  --radius-control: 0.5rem;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  min-height: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::selection {
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+}

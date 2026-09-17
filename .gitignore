@@ -1,0 +1,16 @@
+node_modules
+dist
+build
+coverage
+.DS_Store
+.env
+.env.local
+*.log
+apps/api/data/*.sqlite
+apps/api/data/*.sqlite-*
+.vite
+.turbo
+*.tsbuildinfo
+.idea
+.vscode/*
+!.vscode/extensions.json
