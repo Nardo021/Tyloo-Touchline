@@ -1,5 +1,10 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { cn } from "../lib/cn";
+import { StorageBanner } from "./StorageBanner";
+import { UpdateBanner } from "./UpdateBanner";
+import { useLiveQuery } from "dexie-react-hooks";
+import { db } from "../db/database";
+import { useUpdateAvailability } from "../hooks/useUpdateAvailability";
 
 const links = [
   { to: "/", label: "Home" },
@@ -9,6 +14,12 @@ const links = [
 ];
 
 export function AppShell() {
+  const updateAvailable = useUpdateAvailability();
+  const active = useLiveQuery(async () => {
+    const matches = await db.matches.toArray();
+    return matches.some((match) => match.status !== "FINISHED" && match.status !== "NOT_STARTED");
+  }, []) ?? false;
+
   return (
     <div className="min-h-dvh bg-background text-text">
       <a
@@ -17,9 +28,11 @@ export function AppShell() {
       >
         Skip to content
       </a>
-      <header className="border-b-2 border-primary bg-primary text-primary-foreground">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <p className="text-xl font-bold tracking-wide">Tyloo Live</p>
+      <StorageBanner />
+      <UpdateBanner visible={updateAvailable && !active} />
+      <header className="border-b-2 border-primary bg-primary pt-[max(0.75rem,env(safe-area-inset-top))] text-primary-foreground">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] py-3 pe-[max(1rem,env(safe-area-inset-right))]">
+          <p className="text-xl font-bold tracking-wide">Touchline</p>
           <nav aria-label="Main" className="flex flex-wrap gap-2">
             {links.map((link) => (
               <NavLink
@@ -38,7 +51,7 @@ export function AppShell() {
           </nav>
         </div>
       </header>
-      <main id="main" className="mx-auto max-w-6xl px-4 py-6">
+      <main id="main" className="mx-auto max-w-6xl px-[max(1rem,env(safe-area-inset-left))] py-6 pe-[max(1rem,env(safe-area-inset-right))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
     </div>

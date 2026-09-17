@@ -6,8 +6,8 @@ import {
   type MatchPlayer,
   type Player,
 } from "@tyloo/shared";
-import { db, defaultAppSettings, getSetting, SETTING_KEYS } from "../../db/database";
-import { enqueueMutation } from "../sync/syncQueue";
+import { db, getAppSettings } from "../../db/database";
+import { toLocalWriteError } from "../../lib/localWrite";
 
 export interface CreateMatchInput {
   opponent: string;
@@ -21,7 +21,7 @@ export interface CreateMatchInput {
 
 export class MatchPersistence {
   async create(input: CreateMatchInput): Promise<Match> {
-    const settings = await getSetting(SETTING_KEYS.appSettings, defaultAppSettings());
+    const settings = await getAppSettings();
     const now = Date.now();
     const match: Match = {
       id: createId(),
@@ -47,15 +47,15 @@ export class MatchPersistence {
       createdAt: now,
       updatedAt: now,
     }));
-    await db.transaction("rw", db.matches, db.matchPlayers, db.clockStates, db.syncQueue, async () => {
-      await db.matches.put(match);
-      await db.matchPlayers.bulkPut(roster);
-      await db.clockStates.put({ ...match.clock, matchId: match.id, updatedAt: now });
-      await enqueueMutation({ id: createId(), kind: "UPSERT_MATCH", payload: match });
-      for (const player of roster) {
-        await enqueueMutation({ id: createId(), kind: "UPSERT_MATCH_PLAYER", payload: player });
-      }
-    });
+    try {
+      await db.transaction("rw", db.matches, db.matchPlayers, db.clockStates, async () => {
+        await db.matches.put(match);
+        await db.matchPlayers.bulkPut(roster);
+        await db.clockStates.put({ ...match.clock, matchId: match.id, updatedAt: now });
+      });
+    } catch (error) {
+      throw toLocalWriteError(error, "The match was not written to this iPad.");
+    }
     return match;
   }
 
@@ -68,29 +68,34 @@ export class MatchPersistence {
   }
 
   async active(): Promise<Match | undefined> {
-    const matches = await db.matches.toArray();
-    return matches.find((match) => match.status !== "FINISHED" && match.status !== "NOT_STARTED")
-      ?? matches.find((match) => match.status !== "FINISHED");
+    const matches = await db.matches.orderBy("updatedAt").reverse().toArray();
+    return (
+      matches.find((match) => match.status !== "FINISHED" && match.status !== "NOT_STARTED") ??
+      matches.find((match) => match.status !== "FINISHED")
+    );
   }
 
   async unfinished(): Promise<Match | undefined> {
-    const matches = await db.matches.toArray();
+    const matches = await db.matches.orderBy("updatedAt").reverse().toArray();
     return matches.find((match) => match.status !== "FINISHED");
   }
 
+  async hasInProgressMatch(): Promise<boolean> {
+    const match = await this.active();
+    return Boolean(match && match.status !== "FINISHED");
+  }
+
   async deleteMatch(id: string): Promise<void> {
-    const now = Date.now();
-    await db.transaction("rw", db.matches, db.matchPlayers, db.events, db.clockStates, db.syncQueue, async () => {
-      await db.matches.delete(id);
-      await db.matchPlayers.where("matchId").equals(id).delete();
-      await db.events.where("matchId").equals(id).delete();
-      await db.clockStates.delete(id);
-      await enqueueMutation({
-        id: createId(),
-        kind: "DELETE_MATCH",
-        payload: { matchId: id, updatedAt: now },
+    try {
+      await db.transaction("rw", db.matches, db.matchPlayers, db.events, db.clockStates, async () => {
+        await db.matches.delete(id);
+        await db.matchPlayers.where("matchId").equals(id).delete();
+        await db.events.where("matchId").equals(id).delete();
+        await db.clockStates.delete(id);
       });
-    });
+    } catch (error) {
+      throw toLocalWriteError(error, "The match could not be deleted on this iPad.");
+    }
   }
 
   async roster(matchId: string): Promise<{ onField: Player[]; bench: Player[] }> {

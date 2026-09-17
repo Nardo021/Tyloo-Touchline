@@ -1,16 +1,19 @@
 import { EVENT_LABELS, formatMatchTime } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "../components/ui/Button";
 import { db } from "../db/database";
 import { eventService } from "../features/events/eventService";
-import { requestSync } from "../features/sync/syncService";
+import { LocalWriteError } from "../lib/localWrite";
+import { markStorageUnavailable } from "../features/storage/storageHealth";
 
 export function TimelinePage() {
   const { id } = useParams<{ id: string }>();
   const match = useLiveQuery(() => (id ? db.matches.get(id) : undefined), [id]);
   const events = useLiveQuery(() => (id ? db.events.where("matchId").equals(id).reverse().sortBy("createdAt") : []), [id]) ?? [];
   const players = useLiveQuery(() => db.players.toArray(), []) ?? [];
+  const [error, setError] = useState<string | null>(null);
   const nameOf = (playerId: string | null) =>
     playerId ? (players.find((player) => player.id === playerId)?.name ?? "Unknown") : "Team";
 
@@ -21,6 +24,7 @@ export function TimelinePage() {
   return (
     <div className="flex flex-col gap-5">
       <h1 className="text-3xl font-bold">Timeline · vs {match.opponent}</h1>
+      {error ? <p className="font-semibold text-danger" role="alert">{error}</p> : null}
       {events.length === 0 ? (
         <p>No events recorded yet.</p>
       ) : (
@@ -39,8 +43,14 @@ export function TimelinePage() {
                 <Button
                   className="mt-3"
                   onClick={async () => {
-                    await eventService.voidEvent(event.id);
-                    requestSync();
+                    try {
+                      await eventService.voidEvent(event.id);
+                      setError(null);
+                    } catch (err) {
+                      const message = err instanceof LocalWriteError ? err.message : "The event could not be voided.";
+                      setError(message);
+                      markStorageUnavailable(message);
+                    }
                   }}
                 >
                   Void event

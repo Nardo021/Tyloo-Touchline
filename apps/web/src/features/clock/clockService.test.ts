@@ -55,4 +55,14 @@ describe("MatchClockService persistence", () => {
     expect(clock.phase).toBe("HALFTIME");
     expect(clock.period).toBe(1);
   });
+
+  it("reconstructs a running clock after the database is reopened", async () => {
+    await clockService.transition(matchId, "START", 10_000);
+    db.close();
+    await db.open();
+    const clock = await clockService.getClock(matchId);
+    expect(clock.running).toBe(true);
+    expect(clock.lastStartedAt).toBe(10_000);
+    expect(clockService.displayedMs(clock, 100_000)).toBe(90_000);
+  });
 });

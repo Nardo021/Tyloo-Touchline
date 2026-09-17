@@ -66,7 +66,7 @@ describe("EventService", () => {
     await db.delete();
   });
 
-  it("persists a player event locally without waiting for the network", async () => {
+  it("persists a player event locally before returning", async () => {
     const event = await eventService.recordPlayerEvent({
       matchId,
       playerId: leoId,
@@ -74,10 +74,22 @@ describe("EventService", () => {
       assistPlayerId: maxId,
     });
     const stored = await db.events.get(event.id);
-    const queued = await db.syncQueue.toArray();
     expect(stored?.type).toBe("GOAL");
     expect(stored?.status).toBe("ACTIVE");
-    expect(queued.some((item) => item.mutation.kind === "UPSERT_EVENT")).toBe(true);
+    expect(stored?.playerId).toBe(leoId);
+  });
+
+  it("restores events from IndexedDB after a new open", async () => {
+    const event = await eventService.recordPlayerEvent({
+      matchId,
+      playerId: leoId,
+      type: "SHOT",
+    });
+    db.close();
+    await db.open();
+    const stored = await db.events.get(event.id);
+    expect(stored?.type).toBe("SHOT");
+    expect(stored?.playerId).toBe(leoId);
   });
 
   it("voids an event instead of deleting it", async () => {
@@ -91,10 +103,12 @@ describe("EventService", () => {
     expect(await db.events.get(event.id)).toMatchObject({ status: "VOIDED" });
   });
 
-  it("updates on-field players after a substitution", async () => {
+  it("updates on-field players after a substitution in one transaction", async () => {
     await eventService.recordSubstitution(matchId, leoId, maxId);
     const roster = await db.matchPlayers.where("matchId").equals(matchId).toArray();
     expect(roster.find((item) => item.playerId === leoId)?.onField).toBe(false);
     expect(roster.find((item) => item.playerId === maxId)?.onField).toBe(true);
+    const events = await db.events.where("matchId").equals(matchId).toArray();
+    expect(events.some((event) => event.type === "SUBSTITUTION" && event.status === "ACTIVE")).toBe(true);
   });
 });

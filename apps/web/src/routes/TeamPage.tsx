@@ -4,7 +4,8 @@ import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Field";
 import { db } from "../db/database";
 import { playerService } from "../features/players/playerService";
-import { requestSync } from "../features/sync/syncService";
+import { LocalWriteError } from "../lib/localWrite";
+import { markStorageUnavailable } from "../features/storage/storageHealth";
 
 export function TeamPage() {
   const players = useLiveQuery(async () => {
@@ -15,30 +16,38 @@ export function TeamPage() {
   const [name, setName] = useState("");
   const [position, setPosition] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function onSave(event: FormEvent) {
     event.preventDefault();
     if (!name.trim() || number === "") {
       return;
     }
-    await playerService.save({
-      id: editingId ?? undefined,
-      number: Number(number),
-      name,
-      position: position || null,
-      active: true,
-    });
-    requestSync();
-    setNumber("");
-    setName("");
-    setPosition("");
-    setEditingId(null);
+    setError(null);
+    try {
+      await playerService.save({
+        id: editingId ?? undefined,
+        number: Number(number),
+        name,
+        position: position || null,
+        active: true,
+      });
+      setNumber("");
+      setName("");
+      setPosition("");
+      setEditingId(null);
+    } catch (err) {
+      const write = err instanceof LocalWriteError ? err : null;
+      setError(write?.message ?? "The player was not written to this iPad.");
+      markStorageUnavailable(write?.message);
+    }
   }
 
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-3xl font-bold">Team</h1>
       <p>Add shirt numbers and names. No player accounts are required.</p>
+      {error ? <p className="font-semibold text-danger" role="alert">{error}</p> : null}
 
       <form className="grid max-w-3xl gap-4 md:grid-cols-4" onSubmit={(event) => void onSave(event)}>
         <Field label="Number" htmlFor="number">
@@ -81,14 +90,17 @@ export function TeamPage() {
                 </Button>
                 <Button
                   onClick={async () => {
-                    await playerService.save({
-                      id: player.id,
-                      number: player.number,
-                      name: player.name,
-                      position: player.position,
-                      active: !player.active,
-                    });
-                    requestSync();
+                    try {
+                      await playerService.save({
+                        id: player.id,
+                        number: player.number,
+                        name: player.name,
+                        position: player.position,
+                        active: !player.active,
+                      });
+                    } catch (err) {
+                      markStorageUnavailable(err instanceof LocalWriteError ? err.message : undefined);
+                    }
                   }}
                 >
                   {player.active ? "Deactivate" : "Activate"}

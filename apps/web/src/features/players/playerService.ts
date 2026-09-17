@@ -1,6 +1,6 @@
 import { createId, DEFAULT_TEAM_ID, type Player } from "@tyloo/shared";
 import { db } from "../../db/database";
-import { enqueueMutation } from "../sync/syncQueue";
+import { toLocalWriteError } from "../../lib/localWrite";
 
 export class PlayerService {
   async listActive(): Promise<Player[]> {
@@ -26,8 +26,11 @@ export class PlayerService {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    await db.players.put(player);
-    await enqueueMutation({ id: createId(), kind: "UPSERT_PLAYER", payload: player });
+    try {
+      await db.players.put(player);
+    } catch (error) {
+      throw toLocalWriteError(error, "The player was not written to this iPad.");
+    }
     return player;
   }
 

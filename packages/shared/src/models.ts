@@ -69,6 +69,17 @@ export interface AppSettings {
   defaultPeriodLengthMs: number;
   deviceName: string;
   firstUseHelpSeen: boolean;
+  keepAwake: boolean;
+  updatedAt: number;
+}
+
+export interface ClockStateRecord {
+  matchId: string;
+  running: boolean;
+  accumulatedMs: number;
+  lastStartedAt: number | null;
+  period: number;
+  phase: ClockPhase;
   updatedAt: number;
 }
 

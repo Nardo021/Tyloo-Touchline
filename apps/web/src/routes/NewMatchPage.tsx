@@ -1,13 +1,15 @@
 import { DEFAULT_COMPETITION, DEFAULT_PERIOD_COUNT, DEFAULT_PERIOD_LENGTH_MS } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { MatchReadyList } from "../components/MatchReady";
 import { PlayerCard } from "../components/PlayerCard";
 import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Field";
 import { db, defaultAppSettings, getSetting, SETTING_KEYS } from "../db/database";
 import { matchService } from "../features/matches/matchService";
-import { requestSync } from "../features/sync/syncService";
+import { LocalWriteError } from "../lib/localWrite";
+import { evaluateReadiness, type OfflineReadiness } from "../pwa/offlineReadiness";
 
 export function NewMatchPage() {
   const navigate = useNavigate();
@@ -27,6 +29,20 @@ export function NewMatchPage() {
   const [squadIds, setSquadIds] = useState<string[]>([]);
   const [starterIds, setStarterIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<OfflineReadiness | null>(null);
+
+  useEffect(() => {
+    if (settings) {
+      setPeriodCount(settings.defaultPeriodCount);
+      setPeriodMinutes(Math.round(settings.defaultPeriodLengthMs / 60000));
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    if (step === 3) {
+      void evaluateReadiness().then(setReadiness);
+    }
+  }, [step]);
 
   function toggle(list: string[], id: string): string[] {
     return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
@@ -48,23 +64,26 @@ export function NewMatchPage() {
       setStep(3);
       return;
     }
-    const match = await matchService.create({
-      opponent,
-      competition,
-      date,
-      periodCount,
-      periodLengthMs: periodMinutes * 60 * 1000,
-      squadIds,
-      starterIds,
-    });
-    requestSync();
-    navigate(`/match/${match.id}/live`);
+    try {
+      const match = await matchService.create({
+        opponent,
+        competition,
+        date,
+        periodCount,
+        periodLengthMs: periodMinutes * 60 * 1000,
+        squadIds,
+        starterIds,
+      });
+      navigate(`/match/${match.id}/live`);
+    } catch (err) {
+      setError(err instanceof LocalWriteError ? err.message : "The match was not written to this iPad.");
+    }
   }
 
   return (
     <form className="flex flex-col gap-6" onSubmit={(event) => void createMatch(event)}>
       <h1 className="text-3xl font-bold">New match</h1>
-      {error ? <p className="font-semibold text-danger">{error}</p> : null}
+      {error ? <p className="font-semibold text-danger" role="alert">{error}</p> : null}
 
       {step === 1 ? (
         <div className="flex max-w-xl flex-col gap-4">
@@ -162,10 +181,16 @@ export function NewMatchPage() {
                 />
               ))}
           </div>
+          <section className="rounded-lg border-2 border-border bg-surface p-4">
+            <h3 className="text-xl font-bold">Match ready</h3>
+            <div className="mt-3">
+              <MatchReadyList readiness={readiness} />
+            </div>
+          </section>
           <div className="flex gap-3">
             <Button onClick={() => setStep(2)}>Back</Button>
-            <Button variant="primary" type="submit">
-              Ready to start
+            <Button variant="primary" type="submit" disabled={Boolean(readiness && !readiness.canStartMatch)}>
+              Start match setup
             </Button>
           </div>
         </div>

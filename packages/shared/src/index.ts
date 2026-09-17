@@ -5,4 +5,5 @@ export * from "./events.js";
 export * from "./labels.js";
 export * from "./models.js";
 export * from "./statistics.js";
-export * from "./sync.js";
+export * from "./schemas.js";
+export * from "./backup.js";

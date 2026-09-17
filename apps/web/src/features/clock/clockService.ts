@@ -1,5 +1,6 @@
 import {
   applyClockTransition,
+  createId,
   createInitialClock,
   displayedElapsedMs,
   matchStatusFromClock,
@@ -8,10 +9,9 @@ import {
   type MatchClockState,
   type MatchControlEvent,
 } from "@tyloo/shared";
-import { createId } from "@tyloo/shared";
 import { db } from "../../db/database";
 import { getDeviceId } from "../../lib/device";
-import { enqueueMutation } from "../sync/syncQueue";
+import { toLocalWriteError } from "../../lib/localWrite";
 
 export class MatchClockService {
   displayedMs(clock: MatchClockState, now = Date.now()): number {
@@ -31,7 +31,7 @@ export class MatchClockService {
   async persist(matchId: string, clock: MatchClockState, extra: Partial<Match> = {}): Promise<Match> {
     const match = await db.matches.get(matchId);
     if (!match) {
-      throw new Error("That match is no longer on this device.");
+      throw toLocalWriteError(new Error("missing"), "That match is no longer on this device.");
     }
     const next: Match = {
       ...match,
@@ -41,17 +41,21 @@ export class MatchClockService {
       status: matchStatusFromClock(clock.phase),
       updatedAt: Date.now(),
     };
-    await db.transaction("rw", db.matches, db.clockStates, async () => {
-      await db.matches.put(next);
-      await db.clockStates.put({ ...clock, matchId, updatedAt: next.updatedAt });
-    });
+    try {
+      await db.transaction("rw", db.matches, db.clockStates, async () => {
+        await db.matches.put(next);
+        await db.clockStates.put({ ...clock, matchId, updatedAt: next.updatedAt });
+      });
+    } catch (error) {
+      throw toLocalWriteError(error, "The clock change was not written to this iPad.");
+    }
     return next;
   }
 
   async transition(matchId: string, kind: ClockTransitionKind, now = Date.now()): Promise<Match> {
     const match = await db.matches.get(matchId);
     if (!match) {
-      throw new Error("That match is no longer on this device.");
+      throw toLocalWriteError(new Error("missing"), "That match is no longer on this device.");
     }
     const clock = applyClockTransition(match.clock, kind, now, match.periodCount);
     const extra: Partial<Match> = {};
@@ -61,28 +65,39 @@ export class MatchClockService {
     if (kind === "END_MATCH") {
       extra.finishedAt = now;
     }
-    const next = await this.persist(matchId, clock, extra);
-    await enqueueMutation({
-      id: createId(),
-      kind: "CLOCK_TRANSITION",
-      payload: { matchId, kind, clock, at: now },
-    });
-    await enqueueMutation({
-      id: createId(),
-      kind: "UPSERT_MATCH",
-      payload: next,
-    });
-    await this.recordControlEvent(next, kind, now);
+    const next: Match = {
+      ...match,
+      ...extra,
+      clock,
+      currentPeriod: clock.period,
+      status: matchStatusFromClock(clock.phase),
+      updatedAt: now,
+    };
+    const controlEvent = await this.buildControlEvent(next, kind, now);
+    try {
+      await db.transaction("rw", db.matches, db.clockStates, db.events, async () => {
+        await db.matches.put(next);
+        await db.clockStates.put({ ...clock, matchId, updatedAt: next.updatedAt });
+        if (controlEvent) {
+          await db.events.put(controlEvent);
+        }
+      });
+    } catch (error) {
+      throw toLocalWriteError(error, "The clock change was not written to this iPad.");
+    }
     return next;
   }
 
-  private async recordControlEvent(match: Match, kind: ClockTransitionKind, now: number): Promise<void> {
+  private async buildControlEvent(
+    match: Match,
+    kind: ClockTransitionKind,
+    now: number,
+  ): Promise<MatchControlEvent | null> {
     const type = controlType(kind);
     if (!type) {
-      return;
+      return null;
     }
-    const deviceId = await getDeviceId();
-    const event: MatchControlEvent = {
+    return {
       id: createId(),
       matchId: match.id,
       type,
@@ -91,17 +106,13 @@ export class MatchClockService {
       matchTimeMs: displayedElapsedMs(match.clock, now),
       createdAt: now,
       updatedAt: now,
-      deviceId,
+      deviceId: await getDeviceId(),
       status: "ACTIVE",
     };
-    await db.events.put(event);
-    await enqueueMutation({ id: createId(), kind: "UPSERT_EVENT", payload: event });
   }
 }
 
-function controlType(
-  kind: ClockTransitionKind,
-): MatchControlEvent["type"] | null {
+function controlType(kind: ClockTransitionKind): MatchControlEvent["type"] | null {
   switch (kind) {
     case "START":
       return "MATCH_START";

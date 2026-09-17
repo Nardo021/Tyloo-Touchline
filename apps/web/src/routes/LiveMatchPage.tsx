@@ -16,19 +16,25 @@ import {
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { MatchReadyList } from "../components/MatchReady";
 import { PlayerCard } from "../components/PlayerCard";
-import { SyncStatusText, WakeStatusText } from "../components/StatusPills";
+import { StorageBanner } from "../components/StorageBanner";
+import { WakeStatusText } from "../components/StatusPills";
+import { UpdateBanner } from "../components/UpdateBanner";
 import { Button } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
-import { db, getSetting, SETTING_KEYS, setSetting } from "../db/database";
+import { db, getAppSettings, getSetting, SETTING_KEYS, setSetting } from "../db/database";
 import { clockService } from "../features/clock/clockService";
 import { eventService } from "../features/events/eventService";
 import { PlayerEventView } from "../features/matches/PlayerEventView";
 import { SubstitutionView } from "../features/matches/SubstitutionView";
-import { requestSync } from "../features/sync/syncService";
+import { markStorageUnavailable } from "../features/storage/storageHealth";
+import { useAppRecovery } from "../hooks/useAppRecovery";
 import { useClockDisplay } from "../hooks/useClockDisplay";
-import { useSyncStatus } from "../hooks/useSyncStatus";
+import { useUpdateAvailability } from "../hooks/useUpdateAvailability";
 import { useWakeLock } from "../hooks/useWakeLock";
+import { LocalWriteError } from "../lib/localWrite";
+import { evaluateReadiness, type OfflineReadiness } from "../pwa/offlineReadiness";
 
 type Overlay = "none" | "player" | "sub" | "corner";
 
@@ -39,8 +45,9 @@ export function LiveMatchPage() {
   const events = useLiveQuery(() => (id ? db.events.where("matchId").equals(id).toArray() : []), [id]) ?? [];
   const players = useLiveQuery(() => db.players.toArray(), []) ?? [];
   const assignments = useLiveQuery(() => (id ? db.matchPlayers.where("matchId").equals(id).toArray() : []), [id]) ?? [];
-  const settings = useLiveQuery(() => getSetting(SETTING_KEYS.appSettings, { teamName: "Tyloo FC" }), []);
+  const settings = useLiveQuery(() => getAppSettings(), []);
   const helpSeen = useLiveQuery(() => getSetting(SETTING_KEYS.helpSeen, false), []);
+  const updateAvailable = useUpdateAvailability();
 
   const [overlay, setOverlay] = useState<Overlay>("none");
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
@@ -49,11 +56,15 @@ export function LiveMatchPage() {
   const [confirm, setConfirm] = useState<"end" | "reset" | "delete" | null>(null);
   const [toast, setToast] = useState<{ event: MatchEvent; until: number } | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [retryAction, setRetryAction] = useState<(() => Promise<void>) | null>(null);
   const [helpDismissed, setHelpDismissed] = useState(false);
+  const [readiness, setReadiness] = useState<OfflineReadiness | null>(null);
 
-  const sync = useSyncStatus();
   const elapsed = useClockDisplay(match?.clock);
-  const wake = useWakeLock(match?.clock.running ?? false);
+  const keepAwake = settings?.keepAwake ?? true;
+  const wake = useWakeLock(match?.clock.running ?? false, keepAwake);
+  useAppRecovery(match?.clock.running ?? false);
 
   const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
   const onField = assignments
@@ -84,9 +95,15 @@ export function LiveMatchPage() {
     if (!savedFlash) {
       return;
     }
-    const timeout = window.setTimeout(() => setSavedFlash(null), 1200);
+    const timeout = window.setTimeout(() => setSavedFlash(null), 1400);
     return () => window.clearTimeout(timeout);
   }, [savedFlash]);
+
+  useEffect(() => {
+    if (match?.status === "NOT_STARTED") {
+      void evaluateReadiness().then(setReadiness);
+    }
+  }, [match?.status]);
 
   if (!id) {
     return <p>Match not found on this device.</p>;
@@ -112,22 +129,39 @@ export function LiveMatchPage() {
   async function afterSave(event: MatchEvent) {
     setOverlay("none");
     setSelectedPlayer(null);
+    setSaveError(null);
+    setRetryAction(null);
     setToast({ event, until: Date.now() + UNDO_WINDOW_MS });
     setSavedFlash(`${formatMatchTime(event.matchTimeMs)} · ${eventService.describe(event, nameOf)}`);
-    requestSync();
+  }
+
+  async function runWrite(action: () => Promise<void>, failure = "The event was not written to this iPad.") {
+    try {
+      await action();
+    } catch (error) {
+      const message = error instanceof LocalWriteError ? error.message : failure;
+      setSaveError(message);
+      setRetryAction(() => async () => {
+        await runWrite(action, failure);
+      });
+      markStorageUnavailable(message);
+    }
   }
 
   async function savePlayerEvent(type: PlayerEventType, assistPlayerId: string | null) {
     if (!selectedPlayer) {
       return;
     }
-    const event = await eventService.recordPlayerEvent({
-      matchId: currentMatch.id,
-      playerId: selectedPlayer.id,
-      type,
-      assistPlayerId,
+    const player = selectedPlayer;
+    await runWrite(async () => {
+      const event = await eventService.recordPlayerEvent({
+        matchId: currentMatch.id,
+        playerId: player.id,
+        type,
+        assistPlayerId,
+      });
+      await afterSave(event);
     });
-    await afterSave(event);
   }
 
   if (overlay === "player" && selectedPlayer) {
@@ -151,17 +185,21 @@ export function LiveMatchPage() {
         bench={bench}
         onCancel={() => setOverlay("none")}
         onSave={async (playerOffId, playerOnId) => {
-          const event = await eventService.recordSubstitution(currentMatch.id, playerOffId, playerOnId);
-          await afterSave(event);
+          await runWrite(async () => {
+            const event = await eventService.recordSubstitution(currentMatch.id, playerOffId, playerOnId);
+            await afterSave(event);
+          }, "The substitution was not written to this iPad.");
         }}
       />
     );
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background text-text">
-      <header className="sticky top-0 z-20 border-b-2 border-primary bg-surface">
-        <div className="flex items-start justify-between gap-3 px-4 py-3">
+    <div className="flex min-h-dvh flex-col overflow-x-hidden bg-background text-text">
+      <StorageBanner />
+      <UpdateBanner visible={updateAvailable && currentMatch.status === "FINISHED"} />
+      <header className="sticky top-0 z-20 border-b-2 border-primary bg-surface pt-[max(0.5rem,env(safe-area-inset-top))]">
+        <div className="flex items-start justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] py-3 pe-[max(1rem,env(safe-area-inset-right))]">
           <div>
             <p className="text-xl font-bold md:text-2xl">{settings?.teamName ?? "Tyloo FC"}</p>
             <p className="text-sm font-semibold uppercase tracking-wide text-text-muted">
@@ -175,32 +213,45 @@ export function LiveMatchPage() {
             {scoreFor} — {scoreAgainst}
           </p>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2 text-sm font-semibold">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-[max(1rem,env(safe-area-inset-left))] py-2 pe-[max(1rem,env(safe-area-inset-right))] text-sm font-semibold">
           <p>
             <span aria-hidden="true">● </span>
-            <SyncStatusText state={sync.state} pending={sync.pending} />
+            Saved locally
             <span className="mx-2">·</span>
             <WakeStatusText status={wake} />
           </p>
           <div className="flex flex-wrap gap-2">
             {canStart(match.clock) ? (
-              <Button variant="primary" onClick={() => void clockService.transition(currentMatch.id, "START")}>
+              <Button
+                variant="primary"
+                onClick={() => void runWrite(async () => {
+                  await clockService.transition(currentMatch.id, "START");
+                }, "The match could not be started on this iPad.")}
+              >
                 Start match
               </Button>
             ) : null}
             {canPause(match.clock) ? (
-              <Button onClick={() => void clockService.transition(currentMatch.id, "PAUSE")}>Pause</Button>
+              <Button onClick={() => void runWrite(async () => {
+                await clockService.transition(currentMatch.id, "PAUSE");
+              }, "The clock could not be paused on this iPad.")}>Pause</Button>
             ) : null}
             {canResume(match.clock) ? (
-              <Button variant="primary" onClick={() => void clockService.transition(currentMatch.id, "RESUME")}>
+              <Button variant="primary" onClick={() => void runWrite(async () => {
+                await clockService.transition(currentMatch.id, "RESUME");
+              }, "The clock could not be resumed on this iPad.")}>
                 Resume
               </Button>
             ) : null}
             {canEndPeriod(match.clock) ? (
-              <Button onClick={() => void clockService.transition(currentMatch.id, "END_PERIOD")}>End period</Button>
+              <Button onClick={() => void runWrite(async () => {
+                await clockService.transition(currentMatch.id, "END_PERIOD");
+              }, "The period could not be ended on this iPad.")}>End period</Button>
             ) : null}
             {canStartNextPeriod(match.clock, match.periodCount) ? (
-              <Button variant="primary" onClick={() => void clockService.transition(currentMatch.id, "START_NEXT_PERIOD")}>
+              <Button variant="primary" onClick={() => void runWrite(async () => {
+                await clockService.transition(currentMatch.id, "START_NEXT_PERIOD");
+              }, "The next period could not be started on this iPad.")}>
                 Start next period
               </Button>
             ) : null}
@@ -228,14 +279,16 @@ export function LiveMatchPage() {
         ) : null}
       </header>
 
-      {sync.state !== "synced" && sync.pending > 0 ? (
-        <p className="px-4 py-2 text-sm font-semibold" role="status">
-          {sync.pending} events safely stored on this iPad. They will sync automatically.
-        </p>
-      ) : null}
-
-      <main className="flex-1 px-4 py-4">
+      <main className="flex-1 px-[max(1rem,env(safe-area-inset-left))] py-4 pe-[max(1rem,env(safe-area-inset-right))]">
         <h1 className="sr-only">Live match against {match.opponent}</h1>
+        {match.status === "NOT_STARTED" ? (
+          <section className="mb-6 rounded-lg border-2 border-primary bg-surface p-4">
+            <h2 className="text-2xl font-bold">Match ready</h2>
+            <div className="mt-3">
+              <MatchReadyList readiness={readiness} />
+            </div>
+          </section>
+        ) : null}
         <section>
           <h2 className="mb-3 text-lg font-bold uppercase tracking-wide">On field</h2>
           {onField.length === 0 ? (
@@ -293,10 +346,10 @@ export function LiveMatchPage() {
             </Button>
             <Button
               className="min-h-16 text-lg"
-              onClick={async () => {
+              onClick={() => void runWrite(async () => {
                 const event = await eventService.recordTeamEvent(currentMatch.id, "GOAL_AGAINST");
                 await afterSave(event);
-              }}
+              })}
             >
               Opp goal
             </Button>
@@ -331,15 +384,14 @@ export function LiveMatchPage() {
       </main>
 
       {toast ? (
-        <div className="sticky bottom-0 border-t-2 border-success bg-surface px-4 py-3" role="status">
+        <div className="sticky bottom-0 border-t-2 border-success bg-surface px-[max(1rem,env(safe-area-inset-left))] py-3 pe-[max(1rem,env(safe-area-inset-right))] pb-[max(0.75rem,env(safe-area-inset-bottom))]" role="status">
           <div className="flex items-center justify-between gap-3">
             <p className="font-semibold">{eventService.describe(toast.event, nameOf)} recorded</p>
             <Button
-              onClick={async () => {
+              onClick={() => void runWrite(async () => {
                 await eventService.voidEvent(toast.event.id);
                 setToast(null);
-                requestSync();
-              }}
+              }, "The event could not be voided on this iPad.")}
             >
               Undo
             </Button>
@@ -350,7 +402,7 @@ export function LiveMatchPage() {
       {savedFlash ? (
         <div className="pointer-events-none fixed inset-x-0 top-24 z-30 flex justify-center px-4">
           <p className="rounded-md border-2 border-success bg-surface px-4 py-3 text-xl font-bold" role="status">
-            Saved · {savedFlash}
+            ✓ Saved · {savedFlash}
           </p>
         </div>
       ) : null}
@@ -359,22 +411,57 @@ export function LiveMatchPage() {
         <div className="flex flex-col gap-3">
           <Button
             variant="primary"
-            onClick={async () => {
+            onClick={() => void runWrite(async () => {
               const event = await eventService.recordTeamEvent(currentMatch.id, "CORNER_FOR");
               await afterSave(event);
-            }}
+            })}
           >
             Corner for us
           </Button>
           <Button
-            onClick={async () => {
+            onClick={() => void runWrite(async () => {
               const event = await eventService.recordTeamEvent(currentMatch.id, "CORNER_AGAINST");
               await afterSave(event);
-            }}
+            })}
           >
             Opponent corner
           </Button>
           <Button onClick={() => setOverlay("none")}>Cancel</Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(saveError)}
+        title="Could not save event"
+        onClose={() => {
+          setSaveError(null);
+          setRetryAction(null);
+        }}
+      >
+        <p>The event was not written to this iPad.</p>
+        {saveError ? <p className="mt-2 font-semibold">{saveError}</p> : null}
+        <div className="mt-4 flex gap-3">
+          <Button
+            onClick={() => {
+              setSaveError(null);
+              setRetryAction(null);
+            }}
+          >
+            Close
+          </Button>
+          {retryAction ? (
+            <Button
+              variant="primary"
+              onClick={() => {
+                const retry = retryAction;
+                setSaveError(null);
+                setRetryAction(null);
+                void retry();
+              }}
+            >
+              Try again
+            </Button>
+          ) : null}
         </div>
       </Dialog>
 
@@ -388,11 +475,11 @@ export function LiveMatchPage() {
           <Button onClick={() => setConfirm(null)}>Keep recording</Button>
           <Button
             variant="danger"
-            onClick={async () => {
+            onClick={() => void runWrite(async () => {
               await clockService.transition(currentMatch.id, "END_MATCH");
               setConfirm(null);
               navigate(`/match/${currentMatch.id}/report`);
-            }}
+            }, "The match could not be ended on this iPad.")}
           >
             End match
           </Button>
@@ -405,10 +492,10 @@ export function LiveMatchPage() {
           <Button onClick={() => setConfirm(null)}>Keep clock</Button>
           <Button
             variant="danger"
-            onClick={async () => {
+            onClick={() => void runWrite(async () => {
               await clockService.transition(currentMatch.id, "RESET");
               setConfirm(null);
-            }}
+            }, "The clock could not be reset on this iPad.")}
           >
             Reset clock
           </Button>
@@ -440,7 +527,6 @@ export function LiveMatchPage() {
           Got it
         </Button>
       </Dialog>
-
     </div>
   );
 }

@@ -1,16 +1,17 @@
-export const APP_NAME = "Tyloo Live";
+export const APP_NAME = "Touchline";
 export const DEFAULT_TEAM_NAME = "Tyloo FC";
 export const DEFAULT_PERIOD_COUNT = 2;
 export const DEFAULT_PERIOD_LENGTH_MS = 20 * 60 * 1000;
 export const DEFAULT_COMPETITION = "NSFA Summer";
 
 export const UNDO_WINDOW_MS = 15_000;
-export const SYNC_ACTIVE_INTERVAL_MS = 5_000;
-export const SYNC_MAX_BACKOFF_MS = 60_000;
 export const CLOCK_DISPLAY_INTERVAL_MS = 250;
 export const RECENT_EVENT_LIMIT = 5;
-export const PIN_MIN_LENGTH = 4;
-export const PIN_MAX_LENGTH = 8;
+
+export const BACKUP_FORMAT = "touchline-backup";
+export const BACKUP_VERSION = 1;
+export const MATCH_EXPORT_FORMAT = "touchline-match";
+export const MATCH_EXPORT_VERSION = 1;
 
 export const PLAYER_EVENT_GRID = [
   "GOAL",

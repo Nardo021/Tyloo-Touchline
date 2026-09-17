@@ -10,7 +10,7 @@ import {
 } from "@tyloo/shared";
 import { db } from "../../db/database";
 import { getDeviceId } from "../../lib/device";
-import { enqueueMutation } from "../sync/syncQueue";
+import { toLocalWriteError } from "../../lib/localWrite";
 
 export interface RecordPlayerInput {
   matchId: string;
@@ -45,14 +45,14 @@ export class EventService {
     };
     const roster = await db.matchPlayers.where("matchId").equals(matchId).toArray();
     const next = applySubstitutionToSquad(roster, playerOffId, playerOnId, complete.createdAt);
-    await db.transaction("rw", db.events, db.matchPlayers, db.syncQueue, async () => {
-      await db.events.put(complete);
-      await db.matchPlayers.bulkPut(next);
-      await enqueueMutation({ id: createId(), kind: "UPSERT_EVENT", payload: complete });
-      for (const player of next) {
-        await enqueueMutation({ id: createId(), kind: "UPSERT_MATCH_PLAYER", payload: player });
-      }
-    });
+    try {
+      await db.transaction("rw", db.events, db.matchPlayers, async () => {
+        await db.events.put(complete);
+        await db.matchPlayers.bulkPut(next);
+      });
+    } catch (error) {
+      throw toLocalWriteError(error, "The substitution was not written to this iPad.");
+    }
     return complete;
   }
 
@@ -62,22 +62,18 @@ export class EventService {
       return event ?? null;
     }
     const updated: MatchEvent = { ...event, status: "VOIDED", updatedAt: Date.now() };
-    await db.transaction("rw", db.events, db.matchPlayers, db.syncQueue, async () => {
-      await db.events.put(updated);
-      if (event.type === "SUBSTITUTION") {
-        const roster = await db.matchPlayers.where("matchId").equals(event.matchId).toArray();
-        const next = revertSubstitutionOnSquad(roster, event.playerOffId, event.playerOnId, updated.updatedAt);
-        await db.matchPlayers.bulkPut(next);
-        for (const player of next) {
-          await enqueueMutation({ id: createId(), kind: "UPSERT_MATCH_PLAYER", payload: player });
+    try {
+      await db.transaction("rw", db.events, db.matchPlayers, async () => {
+        await db.events.put(updated);
+        if (event.type === "SUBSTITUTION") {
+          const roster = await db.matchPlayers.where("matchId").equals(event.matchId).toArray();
+          const next = revertSubstitutionOnSquad(roster, event.playerOffId, event.playerOnId, updated.updatedAt);
+          await db.matchPlayers.bulkPut(next);
         }
-      }
-      await enqueueMutation({
-        id: createId(),
-        kind: "VOID_EVENT",
-        payload: { eventId: event.id, updatedAt: updated.updatedAt },
       });
-    });
+    } catch (error) {
+      throw toLocalWriteError(error, "The event could not be voided on this iPad.");
+    }
     return updated;
   }
 
@@ -105,7 +101,7 @@ export class EventService {
   private async buildBase(matchId: string, type: EventType) {
     const match = await db.matches.get(matchId);
     if (!match) {
-      throw new Error("That match is no longer on this device.");
+      throw toLocalWriteError(new Error("missing"), "That match is no longer on this device.");
     }
     const now = Date.now();
     return {
@@ -122,8 +118,15 @@ export class EventService {
   }
 
   private async commit(event: MatchEvent): Promise<void> {
-    await db.events.put(event);
-    await enqueueMutation({ id: createId(), kind: "UPSERT_EVENT", payload: event });
+    try {
+      await db.events.put(event);
+      const stored = await db.events.get(event.id);
+      if (!stored) {
+        throw new Error("missing-write");
+      }
+    } catch (error) {
+      throw toLocalWriteError(error, "The event was not written to this iPad.");
+    }
   }
 }
 

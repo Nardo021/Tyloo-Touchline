@@ -3,6 +3,9 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { Link, useParams } from "react-router-dom";
 import { Button } from "../components/ui/Button";
 import { db, defaultAppSettings, getSetting, SETTING_KEYS } from "../db/database";
+import { backupService, downloadTextFile } from "../features/backup/backupService";
+import { UpdateBanner } from "../components/UpdateBanner";
+import { useUpdateAvailability } from "../hooks/useUpdateAvailability";
 
 export function ReportPage() {
   const { id } = useParams<{ id: string }>();
@@ -11,6 +14,7 @@ export function ReportPage() {
   const players = useLiveQuery(() => db.players.toArray(), []) ?? [];
   const roster = useLiveQuery(() => (id ? db.matchPlayers.where("matchId").equals(id).toArray() : []), [id]) ?? [];
   const settings = useLiveQuery(() => getSetting(SETTING_KEYS.appSettings, defaultAppSettings()), []);
+  const updateAvailable = useUpdateAvailability();
 
   if (!match) {
     return <p>That match is not stored on this device.</p>;
@@ -19,8 +23,44 @@ export function ReportPage() {
   const report = deriveMatchReport(events, roster.map((item) => item.playerId));
   const playerName = (playerId: string) => players.find((player) => player.id === playerId)?.name ?? "Unknown";
 
+  async function exportJson() {
+    if (!id) {
+      return;
+    }
+    const file = await backupService.exportMatch(id);
+    if (file) {
+      downloadTextFile(file.filename, file.json, "application/json");
+    }
+  }
+
+  async function exportCsv() {
+    if (!id) {
+      return;
+    }
+    const file = await backupService.exportMatchCsv(id);
+    if (file) {
+      downloadTextFile(file.filename, file.csv, "text/csv");
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
+      <UpdateBanner visible={updateAvailable && match.status === "FINISHED"} />
+      {match.status === "FINISHED" ? (
+        <section className="rounded-lg border-2 border-primary bg-surface p-4">
+          <h2 className="text-sm font-bold uppercase tracking-wide">Match complete</h2>
+          <p className="mt-2 text-xl font-semibold">
+            {settings?.teamName ?? "Tyloo FC"} {report.scoreFor}–{report.scoreAgainst} {match.opponent}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button variant="primary" onClick={() => void exportJson()}>
+              Export match
+            </Button>
+            <Button onClick={() => void exportCsv()}>Export events CSV</Button>
+          </div>
+        </section>
+      ) : null}
+
       <div>
         <h1 className="text-3xl font-bold">Match report</h1>
         <p className="mt-2 text-xl font-semibold">
@@ -88,6 +128,12 @@ export function ReportPage() {
         <Link to={`/match/${match.id}/timeline`}>
           <Button>Timeline</Button>
         </Link>
+        {match.status !== "FINISHED" ? (
+          <>
+            <Button onClick={() => void exportJson()}>Export match JSON</Button>
+            <Button onClick={() => void exportCsv()}>Export events CSV</Button>
+          </>
+        ) : null}
       </div>
     </div>
   );
