@@ -1,33 +1,26 @@
 import {
-  applyClockTransition,
   applyGoalkeeperChangeToRuntime,
   applyGoalkeeperToSlots,
-  applyRuntimeToSquad,
   applySubstitutionToRuntime,
   applySubstitutionToSquad,
   createFormationSnapshot,
   createId,
   createMatchRuntimeState,
   displayedElapsedMs,
+  goalkeeperIdFromSlots,
   inheritSlotOnSubstitution,
   inferInitialGoalkeeper,
   isLatestLineupEvent,
   latestLineupGroup,
-  matchStatusFromPhase,
   revertSubstitutionOnSquad,
-  validateHalftimePairs,
-  validateLineupSlots,
   validateLiveRuntimeState,
-  validateRuntimeState,
-  type FormationType,
   type GoalkeeperChangeEvent,
+  type LineupDraft,
   type LineupSlot,
   type Match,
-  type MatchControlEvent,
   type MatchEvent,
   type MatchRuntimeState,
   type SubstitutionEvent,
-  type SubstitutionPair,
 } from "@tyloo/shared";
 import { db } from "../../db/database";
 import { getDeviceId } from "../../lib/device";
@@ -40,6 +33,20 @@ export interface LineupMutationResult {
 }
 
 export class LineupService {
+  async getDraft(matchId: string): Promise<LineupDraft | undefined> {
+    return db.lineupDrafts.get(matchId);
+  }
+
+  async saveDraft(draft: LineupDraft): Promise<LineupDraft> {
+    const next = { ...draft, updatedAt: Date.now() };
+    try {
+      await db.lineupDrafts.put(next);
+    } catch (error) {
+      throw toLocalWriteError(error, "The half-time setup was not written to this iPad.");
+    }
+    return next;
+  }
+
   async getRuntime(matchId: string): Promise<MatchRuntimeState | undefined> {
     return db.matchRuntimeStates.get(matchId);
   }
@@ -179,107 +186,6 @@ export class LineupService {
     return nextRuntime;
   }
 
-  async startNextPeriod(input: {
-    matchId: string;
-    nextOnFieldIds: string[];
-    nextGoalkeeperId: string;
-    pairs: SubstitutionPair[];
-    formation?: FormationType;
-    slots?: LineupSlot[];
-    now?: number;
-  }): Promise<LineupMutationResult> {
-    const now = input.now ?? Date.now();
-    const match = await requireMatch(input.matchId);
-    if (match.clock.phase !== "HALFTIME") {
-      throw toLocalWriteError(new Error("not-halftime"), "The next period can only start from half-time.");
-    }
-    const roster = await db.matchPlayers.where("matchId").equals(input.matchId).toArray();
-    const runtime = await this.requireRuntime(input.matchId);
-    const squadIds = roster.map((player) => player.playerId);
-    const previousOnField = runtime.onFieldPlayerIds;
-    const validation = validateRuntimeState({
-      squadPlayerIds: squadIds,
-      onFieldPlayerIds: input.nextOnFieldIds,
-      goalkeeperId: input.nextGoalkeeperId,
-    });
-    if (!validation.ok) {
-      throw toLocalWriteError(new Error(validation.errors.join(" ")), validation.errors[0] ?? "The second-half lineup is not valid.");
-    }
-    if (!validateHalftimePairs(previousOnField, input.nextOnFieldIds, input.pairs)) {
-      throw toLocalWriteError(new Error("pairs"), "Half-time substitutions do not match the selected lineup.");
-    }
-
-    const nextPeriod = match.clock.period + 1;
-    const events: MatchEvent[] = [];
-    for (const pair of input.pairs) {
-      events.push(await this.buildSubstitution(match, pair.playerOffId, pair.playerOnId, now, 0, nextPeriod));
-    }
-    if (runtime.goalkeeperId && runtime.goalkeeperId !== input.nextGoalkeeperId) {
-      events.push(await this.buildGoalkeeperChange(match, runtime.goalkeeperId, input.nextGoalkeeperId, now, 0, nextPeriod));
-    }
-
-    const clock = applyClockTransition(match.clock, "START_NEXT_PERIOD", now, match.periodCount);
-    const nextMatch: Match = {
-      ...match,
-      clock,
-      currentPeriod: clock.period,
-      phase: "SECOND_HALF",
-      clockMode: match.clockMode ?? "period-local",
-      status: matchStatusFromPhase("SECOND_HALF", clock.phase),
-      updatedAt: now,
-    };
-    let snapshotId = runtime.formationSnapshotId ?? "";
-    let snapshot = null;
-    if (input.formation && input.slots) {
-      const formationResult = validateLineupSlots(input.formation, input.slots, input.nextOnFieldIds, input.nextGoalkeeperId);
-      if (!formationResult.ok) {
-        throw toLocalWriteError(new Error(formationResult.errors.join(" ")), formationResult.errors[0] ?? "The second-half formation is not valid.");
-      }
-      snapshot = createFormationSnapshot({
-        id: createId(),
-        matchId: input.matchId,
-        period: nextPeriod,
-        formation: input.formation,
-        effectiveMatchTimeMs: 0,
-        slots: input.slots,
-        createdAt: now,
-      });
-      snapshotId = snapshot.id;
-    }
-    const nextRuntime = createMatchRuntimeState(
-      input.matchId,
-      input.nextOnFieldIds,
-      input.nextGoalkeeperId,
-      clock.period,
-      now,
-      snapshotId,
-    );
-    const nextRoster = applyRuntimeToSquad(roster, input.nextOnFieldIds, now);
-    const periodStart = await this.buildControlEvent({ ...nextMatch, clock: { ...clock, accumulatedMs: 0 } }, "PERIOD_START", now, 0, nextPeriod);
-
-    try {
-      await db.transaction("rw", [db.matches, db.clockStates, db.events, db.matchPlayers, db.matchRuntimeStates, db.formationSnapshots, db.lineupDrafts], async () => {
-        await db.matches.put(nextMatch);
-        await db.clockStates.put({ ...clock, matchId: input.matchId, updatedAt: now });
-        await db.matchRuntimeStates.put(nextRuntime);
-        await db.matchPlayers.bulkPut(nextRoster);
-        if (snapshot) {
-          await db.formationSnapshots.put(snapshot);
-        }
-        for (const event of events) {
-          await db.events.put(event);
-        }
-        if (periodStart) {
-          await db.events.put(periodStart);
-        }
-        await db.lineupDrafts.delete(input.matchId);
-      });
-    } catch (error) {
-      throw toLocalWriteError(error, "The second half was not written to this iPad.");
-    }
-    return { events, runtime: nextRuntime, match: nextMatch };
-  }
-
   async buildPublicSubstitution(
     matchId: string,
     playerOffId: string,
@@ -337,11 +243,26 @@ export class LineupService {
     }
 
     const voided = group.map((item) => ({ ...item, status: "VOIDED" as const, updatedAt: now }));
+    const groupStart = Math.min(...group.map((item) => item.createdAt));
     try {
-      await db.transaction("rw", db.events, db.matchPlayers, db.matchRuntimeStates, async () => {
+      await db.transaction("rw", db.events, db.matchPlayers, db.matchRuntimeStates, db.formationSnapshots, async () => {
         for (const item of voided) {
           await db.events.put(item);
         }
+        const snapshots = await db.formationSnapshots.where("matchId").equals(event.matchId).toArray();
+        for (const snapshot of snapshots) {
+          if (snapshot.status !== "VOIDED" && snapshot.createdAt >= groupStart) {
+            await db.formationSnapshots.put({ ...snapshot, status: "VOIDED" });
+          }
+        }
+        const remaining = snapshots
+          .filter((snapshot) => snapshot.status !== "VOIDED" && snapshot.createdAt < groupStart)
+          .sort((left, right) => left.createdAt - right.createdAt);
+        nextRuntime = {
+          ...nextRuntime,
+          formationSnapshotId: remaining[remaining.length - 1]?.id ?? "",
+          updatedAt: now,
+        };
         await db.matchPlayers.bulkPut(nextRoster);
         await db.matchRuntimeStates.put(nextRuntime);
       });
@@ -385,20 +306,6 @@ export class LineupService {
     };
   }
 
-  private async buildControlEvent(
-    match: Match,
-    type: MatchControlEvent["type"],
-    now: number,
-    matchTimeMs = displayedElapsedMs(match.clock, now),
-    period = match.clock.period,
-  ): Promise<MatchControlEvent> {
-    return {
-      ...(await this.baseEvent(match.id, now, period, matchTimeMs)),
-      type,
-      playerId: null,
-    };
-  }
-
   private async baseEvent(matchId: string, now: number, period: number, matchTimeMs: number) {
     return {
       id: createId(),
@@ -438,7 +345,7 @@ function slotsAfterSubstitution(
 }
 
 function goalkeeperIdFromSlotsSafe(slots: LineupSlot[]): string {
-  return slots.find((slot) => slot.role === "GK")?.playerId ?? "";
+  return goalkeeperIdFromSlots(slots);
 }
 
 async function requireMatch(matchId: string): Promise<Match> {

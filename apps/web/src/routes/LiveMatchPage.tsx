@@ -3,17 +3,17 @@ import {
   canEndPeriod,
   canPause,
   canResume,
-  canStart,
   emptySlots,
   formatMatchTime,
   formatPeriodEventTime,
+  isLivePhase,
   periodHeading,
   playerShirtLabel,
   remapSlotsToFormation,
   resolveMatchPhase,
   RECENT_EVENT_LIMIT,
   UNDO_WINDOW_MS,
-  validateLiveRuntimeState,
+  validateLineup,
   type FormationType,
   type LineupSlot,
   type MatchEvent,
@@ -21,7 +21,7 @@ import {
   type PlayerEventType,
 } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { MatchReadyList } from "../components/MatchReady";
 import { PlayerCard } from "../components/PlayerCard";
@@ -33,11 +33,8 @@ import { Dialog } from "../components/ui/Dialog";
 import { db, getAppSettings, getSetting, SETTING_KEYS, setSetting } from "../db/database";
 import { clockService } from "../features/clock/clockService";
 import { eventService } from "../features/events/eventService";
-import { ChangeGoalkeeperView } from "../features/matches/ChangeGoalkeeperView";
-import { ChangeLineupView } from "../features/matches/ChangeLineupView";
+import { LiveMatchOverlays, type LiveOverlay } from "../features/matches/LiveMatchOverlays";
 import { LineupOverlay } from "../features/matches/LineupOverlay";
-import { PlayerEventView } from "../features/matches/PlayerEventView";
-import { SubstitutionView } from "../features/matches/SubstitutionView";
 import { lifecycleService } from "../features/matches/lifecycleService";
 import { lineupService } from "../features/matches/lineupService";
 import { markStorageUnavailable } from "../features/storage/storageHealth";
@@ -48,7 +45,41 @@ import { useWakeLock } from "../hooks/useWakeLock";
 import { LocalWriteError } from "../lib/localWrite";
 import { evaluateReadiness, type OfflineReadiness } from "../pwa/offlineReadiness";
 
-type Overlay = "none" | "player" | "sub" | "gk" | "corner" | "lineup";
+export function LiveMatchGate() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const match = useLiveQuery(() => (id ? db.matches.get(id) : undefined), [id]);
+
+  useEffect(() => {
+    if (!id || !match) {
+      return;
+    }
+    if (resolveMatchPhase(match) === "HALF_TIME") {
+      navigate(`/match/${id}/summary/1`, { replace: true });
+    }
+  }, [id, match, navigate]);
+
+  if (!id) {
+    return <p>Match not found on this device.</p>;
+  }
+  if (match === undefined) {
+    return <p>Opening match from this iPad…</p>;
+  }
+  if (!match) {
+    return (
+      <div className="p-6">
+        <p>That match is not stored on this device.</p>
+        <Link to="/matches" className="font-semibold underline">
+          Back to matches
+        </Link>
+      </div>
+    );
+  }
+  if (resolveMatchPhase(match) === "HALF_TIME") {
+    return <p>Opening first-half summary…</p>;
+  }
+  return <LiveMatchPage />;
+}
 
 export function LiveMatchPage() {
   const { id } = useParams<{ id: string }>();
@@ -67,10 +98,10 @@ export function LiveMatchPage() {
   const helpSeen = useLiveQuery(() => getSetting(SETTING_KEYS.helpSeen, false), []);
   const updateAvailable = useUpdateAvailability();
 
-  const [overlay, setOverlay] = useState<Overlay>("none");
+  const [overlay, setOverlay] = useState<LiveOverlay>("none");
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [confirm, setConfirm] = useState<"end-half" | "end" | "reset" | "delete" | null>(null);
+  const [confirm, setConfirm] = useState<"end-half" | "end" | "reset" | null>(null);
   const [lineupOpen, setLineupOpen] = useState(false);
   const [editFormation, setEditFormation] = useState<FormationType>("2-1-2");
   const [editSlots, setEditSlots] = useState<LineupSlot[]>([]);
@@ -80,7 +111,6 @@ export function LiveMatchPage() {
   const [retryAction, setRetryAction] = useState<(() => Promise<void>) | null>(null);
   const [helpDismissed, setHelpDismissed] = useState(false);
   const [readiness, setReadiness] = useState<OfflineReadiness | null>(null);
-  const skipCompletedRedirect = useRef(false);
 
   const elapsed = useClockDisplay(match?.clock);
   const keepAwake = settings?.keepAwake ?? true;
@@ -102,11 +132,11 @@ export function LiveMatchPage() {
   const scoreFor = activeEvents.filter((event) => event.type === "GOAL").length;
   const scoreAgainst = activeEvents.filter((event) => event.type === "GOAL_AGAINST" || event.type === "OWN_GOAL").length;
   const recent = [...activeEvents].sort((a, b) => b.createdAt - a.createdAt).slice(0, RECENT_EVENT_LIMIT);
-  const lineupValid = validateLiveRuntimeState({
-    squadPlayerIds: assignments.map((item) => item.playerId),
-    onFieldPlayerIds: onFieldIds,
-    goalkeeperId,
-  }).ok;
+  const kickoffDraft = preMatchDraft?.purpose === "PRE_MATCH" ? preMatchDraft : undefined;
+  const kickoffValid = Boolean(
+    kickoffDraft
+    && validateLineup(kickoffDraft.formation, kickoffDraft.slots, assignments.map((item) => item.playerId)).ok,
+  );
 
   useEffect(() => {
     if (!toast) {
@@ -130,19 +160,6 @@ export function LiveMatchPage() {
     }
   }, [match?.status]);
 
-  useEffect(() => {
-    if (!match || !id) {
-      return;
-    }
-    const phase = resolveMatchPhase(match);
-    if (phase === "HALF_TIME") {
-      navigate(`/match/${id}/summary/1`, { replace: true });
-    }
-    if (phase === "FULL_TIME" && !skipCompletedRedirect.current) {
-      navigate(`/match/${id}/report`, { replace: true });
-    }
-  }, [id, match, navigate]);
-
   if (!id) {
     return <p>Match not found on this device.</p>;
   }
@@ -161,6 +178,9 @@ export function LiveMatchPage() {
   }
 
   const currentMatch = match;
+  const phase = resolveMatchPhase(match);
+  const formationLabel = snapshot?.formation ?? preMatchDraft?.formation ?? match.startingFormation ?? "—";
+  const periodActionLabel = phase === "SECOND_HALF" ? "End match" : "End first half";
   const nameOf = (playerId: string | null) => {
     if (!playerId) {
       return "Team";
@@ -207,110 +227,6 @@ export function LiveMatchPage() {
     });
   }
 
-  if (overlay === "player" && selectedPlayer) {
-    return (
-      <PlayerEventView
-        player={selectedPlayer}
-        teammates={onField}
-        isGoalkeeper={selectedPlayer.id === goalkeeperId}
-        onCancel={() => {
-          setOverlay("none");
-          setSelectedPlayer(null);
-        }}
-        onSave={(type, assistPlayerId) => void savePlayerEvent(type, assistPlayerId)}
-      />
-    );
-  }
-
-  if (overlay === "sub") {
-    return (
-      <SubstitutionView
-        onField={onField}
-        bench={bench}
-        goalkeeperId={goalkeeperId}
-        matchTimeMs={elapsed}
-        onCancel={() => setOverlay("none")}
-        formation={snapshot?.formation}
-        slots={snapshot?.slots}
-        onSave={async (playerOffId, playerOnId, nextGoalkeeperId, nextSlots) => {
-          await runWrite(async () => {
-            const result = await eventService.recordSubstitutionGroup(
-              currentMatch.id,
-              playerOffId,
-              playerOnId,
-              nextGoalkeeperId,
-              nextSlots,
-            );
-            const primary = result.events[0];
-            if (primary) {
-              await afterSave(primary);
-            }
-          }, "The substitution was not written to this iPad.");
-        }}
-      />
-    );
-  }
-
-  if (overlay === "gk") {
-    return (
-      <ChangeGoalkeeperView
-        onField={onField}
-        goalkeeperId={goalkeeperId}
-        onCancel={() => setOverlay("none")}
-        onSave={async (newGoalkeeperId) => {
-          await runWrite(async () => {
-            if (!goalkeeperId) {
-              await lineupService.assignMissingGoalkeeper(currentMatch.id, newGoalkeeperId);
-              setOverlay("none");
-              setSavedFlash("Goalkeeper set");
-              return;
-            }
-            const result = await eventService.recordGoalkeeperChange(currentMatch.id, newGoalkeeperId);
-            const primary = result.events[0];
-            if (primary) {
-              await afterSave(primary);
-            }
-          }, "The goalkeeper change was not written to this iPad.");
-        }}
-      />
-    );
-  }
-
-  if (overlay === "lineup") {
-    return (
-      <ChangeLineupView
-        formation={editFormation}
-        slots={editSlots}
-        onField={onField}
-        onChange={(nextFormation, nextSlots) => {
-          setEditFormation(nextFormation);
-          setEditSlots(nextSlots);
-        }}
-        onCancel={() => setOverlay("none")}
-        onSave={() => {
-          void runWrite(async () => {
-            const result = await lifecycleService.changeLineup({
-              matchId: currentMatch.id,
-              formation: editFormation,
-              slots: editSlots,
-            });
-            setOverlay("none");
-            const primary = result.events[0];
-            if (primary) {
-              await afterSave(primary);
-            } else {
-              setSavedFlash("Lineup updated");
-            }
-          }, "The lineup change was not written to this iPad.");
-        }}
-      />
-    );
-  }
-
-  const phase = resolveMatchPhase(match);
-  const formationLabel = snapshot?.formation ?? preMatchDraft?.formation ?? match.startingFormation ?? "—";
-  const periodActionLabel = phase === "SECOND_HALF" || match.clock.period > 1 ? "End match" : "End first half";
-
   return (
     <div className="flex min-h-dvh flex-col overflow-x-hidden bg-background text-text">
       <StorageBanner />
@@ -344,31 +260,30 @@ export function LiveMatchPage() {
             <WakeStatusText status={wake} />
           </p>
           <div className="flex flex-wrap gap-2">
-            {canStart(match.clock) ? (
+            {phase === "PRE_MATCH" ? (
               <Button
                 variant="primary"
-                disabled={!lineupValid}
+                disabled={!kickoffValid}
                 onClick={() => void runWrite(async () => {
-                  const draft = preMatchDraft;
-                  const slots = draft?.slots ?? snapshot?.slots ?? emptySlots(draft?.formation ?? "2-1-2");
+                  if (!kickoffDraft) {
+                    return;
+                  }
                   await lifecycleService.startFirstHalf({
                     matchId: currentMatch.id,
-                    formation: draft?.formation ?? snapshot?.formation ?? match.startingFormation ?? "2-1-2",
-                    slots: slots.every((slot) => slot.playerId)
-                      ? slots
-                      : remapSlotsToFormation(slots, draft?.formation ?? "2-1-2", onFieldIds, goalkeeperId ?? ""),
+                    formation: kickoffDraft.formation,
+                    slots: kickoffDraft.slots,
                   });
                 }, "The first half could not be started on this iPad.")}
               >
                 Start first half
               </Button>
             ) : null}
-            {canPause(match.clock) ? (
+            {isLivePhase(phase) && canPause(match.clock) ? (
               <Button onClick={() => void runWrite(async () => {
                 await clockService.transition(currentMatch.id, "PAUSE");
               }, "The clock could not be paused on this iPad.")}>Pause</Button>
             ) : null}
-            {canResume(match.clock) ? (
+            {isLivePhase(phase) && canResume(match.clock) ? (
               <Button variant="primary" onClick={() => void runWrite(async () => {
                 await clockService.transition(currentMatch.id, "RESUME");
               }, "The clock could not be resumed on this iPad.")}>
@@ -405,129 +320,198 @@ export function LiveMatchPage() {
         ) : null}
       </header>
 
-      <main className="flex-1 px-[max(1rem,env(safe-area-inset-left))] py-4 pe-[max(1rem,env(safe-area-inset-right))]">
-        <h1 className="sr-only">Live match against {match.opponent}</h1>
-        {match.status === "NOT_STARTED" ? (
-          <section className="mb-6 rounded-lg border-2 border-primary bg-surface p-4">
-            <h2 className="text-2xl font-bold">Match ready</h2>
-            <div className="mt-3">
-              <MatchReadyList readiness={readiness} />
-            </div>
-            {!lineupValid ? (
-              <p className="mt-3 font-semibold">
-                Select a starting goalkeeper and confirm 6 on-field players before kick-off.
-              </p>
-            ) : null}
+      <div className="relative flex-1">
+        <main className="px-[max(1rem,env(safe-area-inset-left))] py-4 pe-[max(1rem,env(safe-area-inset-right))]">
+          <h1 className="sr-only">Live match against {match.opponent}</h1>
+          {phase === "PRE_MATCH" ? (
+            <section className="mb-6 rounded-lg border-2 border-primary bg-surface p-4">
+              <h2 className="text-2xl font-bold">Match ready</h2>
+              <div className="mt-3">
+                <MatchReadyList readiness={readiness} />
+              </div>
+              {!kickoffValid ? (
+                <p className="mt-3 font-semibold">
+                  Finish a complete starting lineup before kick-off. Every slot needs one of the six on-field players.
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+
+          {!goalkeeperId ? (
+            <section className="mb-6 rounded-lg border-2 border-warning bg-surface p-4">
+              <h2 className="text-xl font-bold">Select the current goalkeeper</h2>
+              <p className="mt-2">This match does not yet have a goalkeeper role assigned.</p>
+              <Button className="mt-3" variant="primary" onClick={() => setOverlay("gk")}>
+                Choose goalkeeper
+              </Button>
+            </section>
+          ) : null}
+
+          <section>
+            <h2 className="mb-3 text-lg font-bold uppercase tracking-wide">On field</h2>
+            {onField.length === 0 ? (
+              <p>No players are on the field. Add a squad from match setup.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                {onField.map((player) => (
+                  <PlayerCard
+                    key={player.id}
+                    player={player}
+                    isGoalkeeper={player.id === goalkeeperId}
+                    onSelect={() => {
+                      setSelectedPlayer(player);
+                      setOverlay("player");
+                    }}
+                  />
+                ))}
+              </div>
+            )}
           </section>
-        ) : null}
 
-        {!goalkeeperId ? (
-          <section className="mb-6 rounded-lg border-2 border-warning bg-surface p-4">
-            <h2 className="text-xl font-bold">Select the current goalkeeper</h2>
-            <p className="mt-2">This match does not yet have a goalkeeper role assigned.</p>
-            <Button className="mt-3" variant="primary" onClick={() => setOverlay("gk")}>
-              Choose goalkeeper
-            </Button>
+          <section className="mt-6">
+            <h2 className="mb-3 text-lg font-bold uppercase tracking-wide text-text-muted">Bench</h2>
+            {bench.length === 0 ? (
+              <p>No bench players in this squad.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-2">
+                {bench.map((player) => (
+                  <PlayerCard
+                    key={player.id}
+                    player={player}
+                    compact
+                    onSelect={() => setOverlay("sub")}
+                  />
+                ))}
+              </div>
+            )}
           </section>
-        ) : null}
 
-        <section>
-          <h2 className="mb-3 text-lg font-bold uppercase tracking-wide">On field</h2>
-          {onField.length === 0 ? (
-            <p>No players are on the field. Add a squad from match setup.</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-              {onField.map((player) => (
-                <PlayerCard
-                  key={player.id}
-                  player={player}
-                  isGoalkeeper={player.id === goalkeeperId}
-                  onSelect={() => {
-                    setSelectedPlayer(player);
-                    setOverlay("player");
-                  }}
-                />
-              ))}
+          <section className="mt-6">
+            <h2 className="mb-3 text-lg font-bold uppercase tracking-wide">Team events</h2>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Button className="min-h-16 text-lg" onClick={() => setOverlay("corner")}>
+                Corner
+              </Button>
+              <Button className="min-h-16 text-lg" onClick={() => setOverlay("sub")}>
+                Substitution
+              </Button>
+              <Button
+                className="min-h-16 text-lg"
+                onClick={() => {
+                  setEditFormation(snapshot?.formation ?? preMatchDraft?.formation ?? "2-1-2");
+                  setEditSlots(
+                    snapshot?.slots
+                    ?? preMatchDraft?.slots
+                    ?? remapSlotsToFormation(emptySlots("2-1-2"), "2-1-2", onFieldIds, goalkeeperId ?? ""),
+                  );
+                  setOverlay("lineup");
+                }}
+              >
+                Change lineup
+              </Button>
+              <Button className="min-h-16 text-lg" onClick={() => setOverlay("gk")}>
+                Change GK
+              </Button>
+              <Button className="min-h-16 text-lg" onClick={() => void runWrite(async () => {
+                const event = await eventService.recordTeamEvent(currentMatch.id, "GOAL_AGAINST");
+                await afterSave(event);
+              })}>
+                Opp goal
+              </Button>
             </div>
-          )}
-        </section>
+          </section>
 
-        <section className="mt-6">
-          <h2 className="mb-3 text-lg font-bold uppercase tracking-wide text-text-muted">Bench</h2>
-          {bench.length === 0 ? (
-            <p>No bench players in this squad.</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-2">
-              {bench.map((player) => (
-                <PlayerCard
-                  key={player.id}
-                  player={player}
-                  compact
-                  onSelect={() => setOverlay("sub")}
-                />
-              ))}
+          <section className="mt-6">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-bold uppercase tracking-wide">Recent</h2>
+              <Link to={`/match/${currentMatch.id}/timeline`} className="font-semibold underline">
+                Full timeline
+              </Link>
             </div>
-          )}
-        </section>
+            {recent.length === 0 ? (
+              <p className="mt-2">No events yet. Tap a player to record what happens.</p>
+            ) : (
+              <ol className="mt-2 flex flex-col gap-2">
+                {recent.map((event) => (
+                  <li key={event.id} className="rounded-md border-2 border-border bg-surface px-3 py-2">
+                    <p className="font-semibold">
+                      <span className="tabular-nums">{formatPeriodEventTime(event.period, event.matchTimeMs, currentMatch.periodCount)}</span>{" "}
+                      {eventService.describe(event, nameOf)}
+                    </p>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </main>
 
-        <section className="mt-6">
-          <h2 className="mb-3 text-lg font-bold uppercase tracking-wide">Team events</h2>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Button className="min-h-16 text-lg" onClick={() => setOverlay("corner")}>
-              Corner
-            </Button>
-            <Button className="min-h-16 text-lg" onClick={() => setOverlay("sub")}>
-              Substitution
-            </Button>
-            <Button
-              className="min-h-16 text-lg"
-              onClick={() => {
-                setEditFormation(snapshot?.formation ?? preMatchDraft?.formation ?? "2-1-2");
-                setEditSlots(
-                  snapshot?.slots
-                  ?? preMatchDraft?.slots
-                  ?? remapSlotsToFormation(emptySlots("2-1-2"), "2-1-2", onFieldIds, goalkeeperId ?? ""),
-                );
-                setOverlay("lineup");
-              }}
-            >
-              Change lineup
-            </Button>
-            <Button className="min-h-16 text-lg" onClick={() => setOverlay("gk")}>
-              Change GK
-            </Button>
-            <Button className="min-h-16 text-lg" onClick={() => void runWrite(async () => {
-              const event = await eventService.recordTeamEvent(currentMatch.id, "GOAL_AGAINST");
-              await afterSave(event);
-            })}>
-              Opp goal
-            </Button>
-          </div>
-        </section>
-
-        <section className="mt-6">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-bold uppercase tracking-wide">Recent</h2>
-            <Link to={`/match/${currentMatch.id}/timeline`} className="font-semibold underline">
-              Full timeline
-            </Link>
-          </div>
-          {recent.length === 0 ? (
-            <p className="mt-2">No events yet. Tap a player to record what happens.</p>
-          ) : (
-            <ol className="mt-2 flex flex-col gap-2">
-              {recent.map((event) => (
-                <li key={event.id} className="rounded-md border-2 border-border bg-surface px-3 py-2">
-                  <p className="font-semibold">
-                    <span className="tabular-nums">{formatPeriodEventTime(event.period, event.matchTimeMs, currentMatch.periodCount)}</span>{" "}
-                    {eventService.describe(event, nameOf)}
-                  </p>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
-      </main>
+        <LiveMatchOverlays
+          overlay={overlay}
+          selectedPlayer={selectedPlayer}
+          onField={onField}
+          bench={bench}
+          goalkeeperId={goalkeeperId}
+          matchTimeMs={elapsed}
+          editFormation={editFormation}
+          editSlots={editSlots}
+          snapshotSlots={snapshot?.slots}
+          onCancel={() => {
+            setOverlay("none");
+            setSelectedPlayer(null);
+          }}
+          onChangeLineup={(nextFormation, nextSlots) => {
+            setEditFormation(nextFormation);
+            setEditSlots(nextSlots);
+          }}
+          onSavePlayerEvent={(type, assistPlayerId) => void savePlayerEvent(type, assistPlayerId)}
+          onSaveSubstitution={(playerOffId, playerOnId, nextGoalkeeperId, nextSlots) => {
+            void runWrite(async () => {
+              const result = await eventService.recordSubstitutionGroup(
+                currentMatch.id,
+                playerOffId,
+                playerOnId,
+                nextGoalkeeperId,
+                nextSlots,
+              );
+              const primary = result.events[0];
+              if (primary) {
+                await afterSave(primary);
+              }
+            }, "The substitution was not written to this iPad.");
+          }}
+          onSaveGoalkeeper={(newGoalkeeperId) => {
+            void runWrite(async () => {
+              if (!goalkeeperId) {
+                await lineupService.assignMissingGoalkeeper(currentMatch.id, newGoalkeeperId);
+                setOverlay("none");
+                setSavedFlash("Goalkeeper set");
+                return;
+              }
+              const result = await eventService.recordGoalkeeperChange(currentMatch.id, newGoalkeeperId);
+              const primary = result.events[0];
+              if (primary) {
+                await afterSave(primary);
+              }
+            }, "The goalkeeper change was not written to this iPad.");
+          }}
+          onSaveLineup={() => {
+            void runWrite(async () => {
+              const result = await lifecycleService.changeLineup({
+                matchId: currentMatch.id,
+                formation: editFormation,
+                slots: editSlots,
+              });
+              setOverlay("none");
+              const primary = result.events[0];
+              if (primary) {
+                await afterSave(primary);
+              } else {
+                setSavedFlash("Lineup updated");
+              }
+            }, "The lineup change was not written to this iPad.");
+          }}
+        />
+      </div>
 
       {toast ? (
         <div className="sticky bottom-0 border-t-2 border-success bg-surface px-[max(1rem,env(safe-area-inset-left))] py-3 pe-[max(1rem,env(safe-area-inset-right))] pb-[max(0.75rem,env(safe-area-inset-bottom))]" role="status">
@@ -617,7 +601,7 @@ export function LiveMatchPage() {
         snapshot={snapshot ?? null}
         players={players}
         onClose={() => setLineupOpen(false)}
-        onChangeLineup={phase === "FIRST_HALF" || phase === "SECOND_HALF" ? () => {
+        onChangeLineup={isLivePhase(phase) ? () => {
           setLineupOpen(false);
           setEditFormation(snapshot?.formation ?? "2-1-2");
           setEditSlots(snapshot?.slots ?? emptySlots("2-1-2"));
@@ -659,7 +643,6 @@ export function LiveMatchPage() {
           <Button
             variant="danger"
             onClick={() => void runWrite(async () => {
-              skipCompletedRedirect.current = true;
               await lifecycleService.endMatch(currentMatch.id);
               setConfirm(null);
               navigate(`/match/${currentMatch.id}/summary/2`);

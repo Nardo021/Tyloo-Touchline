@@ -80,3 +80,21 @@ export function resolveMatchPhase(match: {
 }): MatchPhase {
   return match.phase ?? matchPhaseFromClock(match.clock.phase, match.clock.period);
 }
+
+export function matchStatusFromRunning(phase: MatchPhase, running: boolean): "NOT_STARTED" | "RUNNING" | "PAUSED" | "HALFTIME" | "FINISHED" {
+  switch (phase) {
+    case "PRE_MATCH":
+      return "NOT_STARTED";
+    case "FIRST_HALF":
+    case "SECOND_HALF":
+      return running ? "RUNNING" : "PAUSED";
+    case "HALF_TIME":
+      return "HALFTIME";
+    case "FULL_TIME":
+      return "FINISHED";
+    default: {
+      const _exhaustive: never = phase;
+      return _exhaustive;
+    }
+  }
+}

@@ -4,6 +4,7 @@ import {
   defaultFirstHalfPreset,
   defaultSecondHalfPreset,
   matchPhaseFromClock,
+  normalizeFormationType,
   type AppSettings,
   type ClockStateRecord,
   type FormationPreset,
@@ -155,6 +156,49 @@ export class TylooDatabase extends Dexie {
         await transaction.table("appMetadata").put({ key: METADATA_KEYS.schemaVersion, value: 4 });
         await transaction.table("appMetadata").put({ key: METADATA_KEYS.migratedAt, value: now });
       });
+
+    this.version(5).upgrade(async (transaction) => {
+      const now = Date.now();
+      const matches = (await transaction.table("matches").toArray()) as Match[];
+      for (const match of matches) {
+        await transaction.table("matches").put({
+          ...match,
+          phase: match.phase ?? matchPhaseFromClock(match.clock.phase, match.clock.period),
+          clockMode: match.clockMode ?? "cumulative",
+          startingFormation: match.startingFormation == null
+            ? match.startingFormation
+            : normalizeFormationType(String(match.startingFormation)),
+          periodDurationsMs: match.periodDurationsMs ?? [],
+          updatedAt: now,
+        } satisfies Match);
+      }
+      const snapshots = (await transaction.table("formationSnapshots").toArray()) as Array<
+        FormationSnapshot & { status?: FormationSnapshot["status"]; formation: string }
+      >;
+      for (const snapshot of snapshots) {
+        await transaction.table("formationSnapshots").put({
+          ...snapshot,
+          formation: normalizeFormationType(snapshot.formation),
+          status: snapshot.status ?? "ACTIVE",
+        } satisfies FormationSnapshot);
+      }
+      const presets = (await transaction.table("formationPresets").toArray()) as FormationPreset[];
+      for (const preset of presets) {
+        const formation = normalizeFormationType(String(preset.formation));
+        if (formation !== preset.formation) {
+          await transaction.table("formationPresets").put({ ...preset, formation } satisfies FormationPreset);
+        }
+      }
+      const drafts = (await transaction.table("lineupDrafts").toArray()) as LineupDraft[];
+      for (const draft of drafts) {
+        const formation = normalizeFormationType(String(draft.formation));
+        if (formation !== draft.formation) {
+          await transaction.table("lineupDrafts").put({ ...draft, formation } satisfies LineupDraft);
+        }
+      }
+      await transaction.table("appMetadata").put({ key: METADATA_KEYS.schemaVersion, value: 5 });
+      await transaction.table("appMetadata").put({ key: METADATA_KEYS.migratedAt, value: now });
+    });
   }
 }
 

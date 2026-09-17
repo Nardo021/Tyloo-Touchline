@@ -1,5 +1,5 @@
 import {
-  validateLineupSlots,
+  validateLineup,
   type FormationType,
   type LineupSlot,
   type Player,
@@ -22,11 +22,10 @@ export function ChangeLineupView({
   onCancel: () => void;
   onSave: () => void;
 }) {
-  const validation = validateLineupSlots(
+  const validation = validateLineup(
     formation,
     slots,
     onField.map((player) => player.id),
-    slots.find((slot) => slot.role === "GK")?.playerId ?? null,
   );
 
   return (

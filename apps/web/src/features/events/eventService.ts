@@ -35,21 +35,6 @@ export class EventService {
     return complete;
   }
 
-  async recordSubstitution(
-    matchId: string,
-    playerOffId: string,
-    playerOnId: string,
-    nextGoalkeeperId?: string,
-    nextSlots?: LineupSlot[],
-  ): Promise<MatchEvent> {
-    const result = await lineupService.recordSubstitution(matchId, playerOffId, playerOnId, nextGoalkeeperId, nextSlots);
-    const substitution = result.events.find((event) => event.type === "SUBSTITUTION");
-    if (!substitution) {
-      throw toLocalWriteError(new Error("missing-sub"), "The substitution was not written to this iPad.");
-    }
-    return substitution;
-  }
-
   async recordSubstitutionGroup(
     matchId: string,
     playerOffId: string,

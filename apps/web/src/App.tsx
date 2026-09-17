@@ -1,7 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { HomePage } from "./routes/HomePage";
-import { LiveMatchPage } from "./routes/LiveMatchPage";
+import { LiveMatchGate } from "./routes/LiveMatchPage";
 import { MatchesPage } from "./routes/MatchesPage";
 import { NewMatchPage } from "./routes/NewMatchPage";
 import { HalfTimeSetupPage } from "./routes/HalfTimeSetupPage";
@@ -14,7 +14,7 @@ import { TimelinePage } from "./routes/TimelinePage";
 export function App() {
   return (
     <Routes>
-      <Route path="/match/:id/live" element={<LiveMatchPage />} />
+      <Route path="/match/:id/live" element={<LiveMatchGate />} />
       <Route element={<AppShell />}>
         <Route path="/" element={<HomePage />} />
         <Route path="/matches" element={<MatchesPage />} />

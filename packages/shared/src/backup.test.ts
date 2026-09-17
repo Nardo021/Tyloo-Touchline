@@ -8,7 +8,7 @@ function validBackup() {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
     exportedAt: "2026-09-17T00:00:00.000Z",
-    appVersion: "1.0.0",
+    appVersion: "3.0.0",
     data: {
       settings: {
         teamName: "Tyloo FC",
@@ -117,6 +117,49 @@ describe("Touchline backup validation", () => {
       expect(result.backup.data.matchRuntimeStates[0]?.onFieldPlayerIds).toEqual([
         "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       ]);
+    }
+  });
+
+  it("maps CUSTOM formations to 2-1-2 and fills snapshot status", () => {
+    const backup = validBackup();
+    backup.data.matches = [
+      {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        teamId: DEFAULT_TEAM_ID,
+        opponent: "Northside",
+        competition: "NSFA Summer",
+        date: "2026-09-17",
+        status: "FINISHED",
+        startingFormation: "CUSTOM",
+        periodCount: 2,
+        periodLengthMs: 1_200_000,
+        currentPeriod: 2,
+        clock: { running: false, accumulatedMs: 1000, lastStartedAt: null, period: 2, phase: "FINISHED" },
+        createdAt: 1,
+        updatedAt: 1,
+        startedAt: 1,
+        finishedAt: 2,
+      },
+    ];
+    (backup.data as { formationSnapshots: unknown[] }).formationSnapshots = [
+      {
+        id: "20000000-0000-4000-8000-000000000001",
+        matchId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        period: 1,
+        formation: "CUSTOM",
+        effectiveMatchTimeMs: 0,
+        slots: [],
+        createdAt: 1,
+      },
+    ];
+    const result = validateTouchlineBackup(backup);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.backup.data.matches[0]?.startingFormation).toBe("2-1-2");
+      expect(result.backup.data.matches[0]?.phase).toBe("FULL_TIME");
+      expect(result.backup.data.matches[0]?.clockMode).toBe("cumulative");
+      expect(result.backup.data.formationSnapshots[0]?.formation).toBe("2-1-2");
+      expect(result.backup.data.formationSnapshots[0]?.status).toBe("ACTIVE");
     }
   });
 

@@ -80,6 +80,7 @@ describe("StatisticsService", () => {
       starterIds: [leo, benjamin],
       initialGoalkeeperId: benjamin,
       matchEnd: { period: 2, matchTimeMs: 40 * 60 * 1000 },
+      clockMode: "cumulative",
     });
     const leoStats = report.players.find((player) => player.playerId === leo);
     const benjaminStats = report.players.find((player) => player.playerId === benjamin);

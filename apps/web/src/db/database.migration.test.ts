@@ -65,7 +65,10 @@ describe("Dexie schema migration", () => {
 
     await db.open();
     expect((await db.players.get(playerId))?.name).toBe("Leo");
-    expect((await db.matches.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))?.opponent).toBe("Northside");
+    const migrated = await db.matches.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(migrated?.opponent).toBe("Northside");
+    expect(migrated?.phase).toBe("FULL_TIME");
+    expect(migrated?.clockMode).toBe("cumulative");
     expect((await db.teams.get(DEFAULT_TEAM_ID))?.name).toBe("Tyloo FC");
     const runtime = await db.matchRuntimeStates.get("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     expect(runtime?.matchId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");

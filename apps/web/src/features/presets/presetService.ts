@@ -3,6 +3,7 @@ import {
   applyDefaultSecondHalfPreset,
   defaultFirstHalfPreset,
   defaultSecondHalfPreset,
+  normalizeFormationType,
   slotsForFormation,
   type FormationPreset,
   type FormationType,
@@ -41,7 +42,7 @@ export class PresetService {
   slotsForPlayers(preset: FormationPreset, players: Player[]): LineupSlot[] {
     const byId = new Map(players.map((player) => [player.id, player]));
     const byNumber = new Map(players.map((player) => [player.number, player]));
-    return slotsForFormation(preset.formation).map((definition) => {
+    return slotsForFormation(normalizeFormationType(String(preset.formation))).map((definition) => {
       const stored = preset.slots.find((slot) => slot.slotId === definition.slotId);
       const fromId = stored?.playerId ? byId.get(stored.playerId) : undefined;
       const fromNumber = stored?.playerNumber != null ? byNumber.get(stored.playerNumber) : undefined;

@@ -27,6 +27,8 @@ function match(): Match {
     competition: "NSFA Summer",
     date: "2026-09-17",
     status: "FINISHED",
+    phase: "FULL_TIME",
+    clockMode: "period-local",
     periodCount: 2,
     periodLengthMs: 1_200_000,
     currentPeriod: 2,

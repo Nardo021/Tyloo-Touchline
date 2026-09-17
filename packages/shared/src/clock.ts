@@ -8,6 +8,11 @@ export const CLOCK_PHASES = [
 
 export type ClockPhase = (typeof CLOCK_PHASES)[number];
 
+export const CLOCK_MODES = ["period-local", "cumulative"] as const;
+export type ClockMode = (typeof CLOCK_MODES)[number];
+
+export type ClockTimerKind = "PAUSE" | "RESUME" | "RESET";
+
 export interface MatchClockState {
   running: boolean;
   accumulatedMs: number;

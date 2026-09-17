@@ -29,6 +29,8 @@ function match(): Match {
     competition: "NSFA Summer",
     date: "2026-09-17",
     status: "RUNNING",
+    phase: "FIRST_HALF",
+    clockMode: "period-local",
     periodCount: 2,
     periodLengthMs: 1_200_000,
     currentPeriod: 1,
@@ -111,7 +113,7 @@ describe("EventService", () => {
   });
 
   it("updates on-field players after a substitution in one transaction", async () => {
-    await eventService.recordSubstitution(matchId, leoId, maxId, maxId);
+    await eventService.recordSubstitutionGroup(matchId, leoId, maxId, maxId);
     const roster = await db.matchPlayers.where("matchId").equals(matchId).toArray();
     expect(roster.find((item) => item.playerId === leoId)?.onField).toBe(false);
     expect(roster.find((item) => item.playerId === maxId)?.onField).toBe(true);

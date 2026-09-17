@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db } from "../../db/database";
 import { setDeviceName } from "../../lib/device";
 import { lifecycleService } from "./lifecycleService";
+import { lineupService } from "./lineupService";
 import { matchService } from "./matchService";
 
 const ids = {
@@ -250,7 +251,7 @@ describe("match lifecycle", () => {
     });
     await lifecycleService.startFirstHalf({ matchId: match.id, formation: first.formation, slots: first.slots, now: 0 });
     await lifecycleService.endFirstHalf(match.id, 1_200_000);
-    await lifecycleService.saveDraft({
+    await lineupService.saveDraft({
       matchId: match.id,
       purpose: "HALF_TIME",
       formation: "2-2-1",
@@ -261,7 +262,7 @@ describe("match lifecycle", () => {
     });
     db.close();
     await db.open();
-    const restored = await lifecycleService.getDraft(match.id);
+    const restored = await lineupService.getDraft(match.id);
     const storedMatch = await db.matches.get(match.id);
     expect(storedMatch?.phase).toBe("HALF_TIME");
     expect(restored?.formation).toBe("2-2-1");

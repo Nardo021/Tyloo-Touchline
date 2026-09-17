@@ -3,6 +3,7 @@ export * from "./constants.js";
 export * from "./clock.js";
 export * from "./events.js";
 export * from "./formation.js";
+export * from "./formationDurations.js";
 export * from "./phase.js";
 export * from "./labels.js";
 export * from "./models.js";

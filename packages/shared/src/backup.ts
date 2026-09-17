@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BACKUP_FORMAT, BACKUP_VERSION, MATCH_EXPORT_FORMAT, MATCH_EXPORT_VERSION } from "./constants.js";
+import { normalizeFormationType } from "./formation.js";
 import { runtimeFromMatchPlayers } from "./lineup.js";
 import { matchPhaseFromClock } from "./phase.js";
 import {
@@ -82,7 +83,19 @@ export function migrateBackupToCurrent(input: unknown): TouchlineBackup | null {
   const record = input as { version?: unknown };
   if (record.version === BACKUP_VERSION) {
     const parsed = touchlineBackupSchema.safeParse(input);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) {
+      return null;
+    }
+    return {
+      ...parsed.data,
+      data: {
+        ...parsed.data.data,
+        matches: parsed.data.data.matches.map(withInferredPhase),
+        formationSnapshots: parsed.data.data.formationSnapshots.map(withNormalizedSnapshot),
+        formationPresets: parsed.data.data.formationPresets.map(withNormalizedFormation),
+        lineupDrafts: parsed.data.data.lineupDrafts.map(withNormalizedFormation),
+      },
+    };
   }
   if (record.version === 2) {
     const parsed = touchlineBackupSchemaV2.safeParse(input);
@@ -97,9 +110,9 @@ export function migrateBackupToCurrent(input: unknown): TouchlineBackup | null {
       data: {
         ...parsed.data.data,
         matches: parsed.data.data.matches.map(withInferredPhase),
-        formationSnapshots: parsed.data.data.formationSnapshots ?? [],
-        formationPresets: parsed.data.data.formationPresets ?? [],
-        lineupDrafts: parsed.data.data.lineupDrafts ?? [],
+        formationSnapshots: (parsed.data.data.formationSnapshots ?? []).map(withNormalizedSnapshot),
+        formationPresets: (parsed.data.data.formationPresets ?? []).map(withNormalizedFormation),
+        lineupDrafts: (parsed.data.data.lineupDrafts ?? []).map(withNormalizedFormation),
       },
     };
   }
@@ -127,13 +140,33 @@ export function migrateBackupToCurrent(input: unknown): TouchlineBackup | null {
   return null;
 }
 
-function withInferredPhase<T extends { clock: { phase: "NOT_STARTED" | "RUNNING" | "PAUSED" | "HALFTIME" | "FINISHED"; period: number }; phase?: string; clockMode?: string }>(
+function withInferredPhase<T extends {
+  clock: { phase: "NOT_STARTED" | "RUNNING" | "PAUSED" | "HALFTIME" | "FINISHED"; period: number };
+  phase?: string;
+  clockMode?: string;
+  startingFormation?: string | null;
+}>(
   match: T,
 ): T {
   return {
     ...match,
     phase: match.phase ?? matchPhaseFromClock(match.clock.phase, match.clock.period),
     clockMode: match.clockMode ?? "cumulative",
+    startingFormation: match.startingFormation == null
+      ? match.startingFormation
+      : normalizeFormationType(match.startingFormation),
+  };
+}
+
+function withNormalizedFormation<T extends { formation: string }>(item: T): T {
+  return { ...item, formation: normalizeFormationType(item.formation) };
+}
+
+function withNormalizedSnapshot<T extends { formation: string; status?: string }>(snapshot: T): T & { status: "ACTIVE" | "VOIDED" } {
+  return {
+    ...snapshot,
+    formation: normalizeFormationType(snapshot.formation),
+    status: snapshot.status === "VOIDED" ? "VOIDED" : "ACTIVE",
   };
 }
 

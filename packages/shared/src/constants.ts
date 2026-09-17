@@ -74,6 +74,5 @@ export const GOALKEEPER_EVENT_GRID = [
   "FOUL",
 ] as const;
 
-export const PLAYER_EVENT_MORE = ["OWN_GOAL"] as const;
 export const OUTFIELD_EVENT_MORE = ["SAVE", "SHOT_ON_TARGET", "INTERCEPTION", "FOUL_WON", "OFFSIDE", "OWN_GOAL"] as const;
 export const GOALKEEPER_EVENT_MORE = ["SHOT_ON_TARGET", "INTERCEPTION", "FOUL_WON", "OFFSIDE", "OWN_GOAL"] as const;

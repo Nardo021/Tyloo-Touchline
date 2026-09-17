@@ -4,14 +4,15 @@ function uniqueIds(ids: string[]): string[] {
   return [...new Set(ids)];
 }
 
-export const FORMATION_TYPES = ["2-1-2", "2-2-1", "CUSTOM"] as const;
+export const FORMATION_TYPES = ["2-1-2", "2-2-1"] as const;
 export type FormationType = (typeof FORMATION_TYPES)[number];
 
 export const TACTICAL_ROLES = ["GK", "DEF", "MID", "FWD"] as const;
 export type TacticalRole = (typeof TACTICAL_ROLES)[number];
 
-export const CLOCK_MODES = ["period-local", "cumulative"] as const;
-export type ClockMode = (typeof CLOCK_MODES)[number];
+export function normalizeFormationType(value: string | null | undefined): FormationType {
+  return value === "2-2-1" ? "2-2-1" : "2-1-2";
+}
 
 export interface SlotDefinition {
   slotId: string;
@@ -35,6 +36,7 @@ export interface FormationSnapshot {
   effectiveMatchTimeMs: number;
   slots: LineupSlot[];
   createdAt: number;
+  status: "ACTIVE" | "VOIDED";
 }
 
 export interface FormationPresetSlot {
@@ -82,8 +84,6 @@ export const FORMATION_221_SLOTS: SlotDefinition[] = [
   { slotId: "GK", role: "GK", order: 5, label: "Goalkeeper" },
 ];
 
-export const FORMATION_CUSTOM_SLOTS: SlotDefinition[] = FORMATION_212_SLOTS;
-
 export const DEFAULT_FIRST_HALF_PRESET_BY_NUMBER: ReadonlyArray<{
   slotId: string;
   role: TacticalRole;
@@ -124,16 +124,15 @@ export const PREFERRED_ROLES_BY_NUMBER: Record<number, readonly TacticalRole[]> 
   6: ["GK", "MID"],
 };
 
-export function slotsForFormation(formation: FormationType): SlotDefinition[] {
-  switch (formation) {
+export function slotsForFormation(formation: FormationType | string): SlotDefinition[] {
+  const normalized = normalizeFormationType(formation);
+  switch (normalized) {
     case "2-1-2":
       return FORMATION_212_SLOTS;
     case "2-2-1":
       return FORMATION_221_SLOTS;
-    case "CUSTOM":
-      return FORMATION_CUSTOM_SLOTS;
     default: {
-      const _exhaustive: never = formation;
+      const _exhaustive: never = normalized;
       return _exhaustive;
     }
   }
@@ -160,79 +159,78 @@ export type FormationValidationResult =
   | { ok: true; goalkeeperId: string; onFieldPlayerIds: string[] }
   | { ok: false; errors: string[] };
 
-export function validateLineupSlots(
+export function validateLineup(
   formation: FormationType,
   slots: LineupSlot[],
-  onFieldPlayerIds: string[],
-  goalkeeperId?: string | null,
+  squadPlayerIds: string[],
 ): FormationValidationResult {
   const errors: string[] = [];
   const expected = slotsForFormation(formation);
   if (slots.length !== MATCH_ON_FIELD_SIZE || expected.length !== MATCH_ON_FIELD_SIZE) {
-    errors.push("formation must contain exactly six slots");
+    errors.push("Give every on-field player one slot.");
   }
 
   const expectedIds = new Set(expected.map((slot) => slot.slotId));
   const slotIds = slots.map((slot) => slot.slotId);
   if (uniqueIds(slotIds).length !== slotIds.length) {
-    errors.push("duplicate formation slots rejected");
+    errors.push("Give every on-field player one slot.");
   }
   for (const slot of expected) {
     if (!slotIds.includes(slot.slotId)) {
-      errors.push(`missing ${slot.slotId} slot`);
+      errors.push("Give every on-field player one slot.");
+      break;
     }
   }
   for (const slot of slots) {
     if (!expectedIds.has(slot.slotId)) {
-      errors.push(`unexpected ${slot.slotId} slot`);
+      errors.push("Give every on-field player one slot.");
+      break;
     }
     const definition = expected.find((item) => item.slotId === slot.slotId);
-    if (definition && definition.role !== slot.role && formation !== "CUSTOM") {
-      errors.push(`${slot.slotId} must be ${definition.role}`);
+    if (definition && definition.role !== slot.role) {
+      errors.push("Give every on-field player one slot.");
+      break;
     }
   }
 
   const assigned = slots.map((slot) => slot.playerId);
   if (assigned.some((id) => !id)) {
-    errors.push("every tactical slot needs a player");
+    errors.push("Select exactly six players, then assign each slot.");
   }
-  if (uniqueIds(assigned.filter(Boolean)).length !== assigned.filter(Boolean).length) {
-    errors.push("each on-field player can occupy only one slot");
+  const field = uniqueIds(assigned.filter(Boolean));
+  if (field.length !== assigned.filter(Boolean).length) {
+    errors.push("Give every on-field player one slot.");
+  }
+  if (field.length !== MATCH_ON_FIELD_SIZE) {
+    errors.push("Select exactly six players, then assign each slot.");
   }
 
-  const field = uniqueIds(onFieldPlayerIds);
-  if (field.length !== MATCH_ON_FIELD_SIZE) {
-    errors.push("select exactly six on-field players");
-  }
-  for (const playerId of assigned.filter(Boolean)) {
-    if (!field.includes(playerId)) {
-      errors.push("every slotted player must be one of the six on the field");
-      break;
-    }
-  }
+  const squad = uniqueIds(squadPlayerIds);
   for (const playerId of field) {
-    if (!assigned.includes(playerId)) {
-      errors.push("every on-field player must appear in the formation");
+    if (!squad.includes(playerId)) {
+      errors.push("Select exactly six players, then assign each slot.");
       break;
     }
   }
 
   const gkSlots = slots.filter((slot) => slot.role === "GK");
-  if (gkSlots.length !== 1) {
-    errors.push("exactly one goalkeeper slot is required");
-  }
-  const gkId = gkSlots[0]?.playerId ?? "";
-  if (gkId && !field.includes(gkId)) {
-    errors.push("goalkeeper must belong to the selected six");
-  }
-  if (goalkeeperId && gkId && goalkeeperId !== gkId) {
-    errors.push("goalkeeper must occupy the GK slot");
+  if (gkSlots.length !== 1 || !gkSlots[0]?.playerId) {
+    errors.push("Select exactly six players, then assign each slot.");
   }
 
   if (errors.length > 0) {
-    return { ok: false, errors };
+    return { ok: false, errors: uniqueIds(errors) };
   }
-  return { ok: true, goalkeeperId: gkId, onFieldPlayerIds: field };
+  return { ok: true, goalkeeperId: gkSlots[0]?.playerId ?? "", onFieldPlayerIds: field };
+}
+
+export function validateLineupSlots(
+  formation: FormationType,
+  slots: LineupSlot[],
+  squadPlayerIds: string[],
+  _goalkeeperId?: string | null,
+): FormationValidationResult {
+  return validateLineup(formation, slots, squadPlayerIds);
 }
 
 export function assignSlotPlayer(slots: LineupSlot[], slotId: string, playerId: string): LineupSlot[] {
@@ -410,11 +408,16 @@ export function createFormationSnapshot(input: {
     effectiveMatchTimeMs: input.effectiveMatchTimeMs,
     slots: input.slots.map((slot) => ({ ...slot })),
     createdAt: input.createdAt,
+    status: "ACTIVE",
   };
 }
 
+export function activeFormationSnapshots(snapshots: FormationSnapshot[]): FormationSnapshot[] {
+  return snapshots.filter((snapshot) => snapshot.status !== "VOIDED");
+}
+
 export function sortFormationSnapshots(snapshots: FormationSnapshot[]): FormationSnapshot[] {
-  return [...snapshots].sort((left, right) => {
+  return [...activeFormationSnapshots(snapshots)].sort((left, right) => {
     if (left.period !== right.period) {
       return left.period - right.period;
     }
@@ -440,103 +443,6 @@ export function snapshotAt(snapshots: FormationSnapshot[], period: number, match
 
 export function startingSnapshotForPeriod(snapshots: FormationSnapshot[], period: number): FormationSnapshot | null {
   return sortFormationSnapshots(snapshots).find((snapshot) => snapshot.period === period) ?? null;
-}
-
-export interface RoleDuration {
-  playerId: string;
-  role: TacticalRole;
-  period: number;
-  durationMs: number;
-}
-
-export function calculateRoleDurations(args: {
-  snapshots: FormationSnapshot[];
-  playerId?: string;
-  period?: number;
-  periodDurationsMs: number[];
-}): RoleDuration[] {
-  const sorted = sortFormationSnapshots(args.snapshots).filter((snapshot) =>
-    args.period == null ? true : snapshot.period === args.period,
-  );
-  const totals = new Map<string, RoleDuration>();
-
-  for (let index = 0; index < sorted.length; index += 1) {
-    const current = sorted[index];
-    if (!current) {
-      continue;
-    }
-    const next = sorted[index + 1];
-    const periodLength = args.periodDurationsMs[current.period - 1] ?? 0;
-    const endMs = next && next.period === current.period ? next.effectiveMatchTimeMs : periodLength;
-    const duration = Math.max(0, endMs - current.effectiveMatchTimeMs);
-    if (duration === 0) {
-      continue;
-    }
-    for (const slot of current.slots) {
-      if (args.playerId && slot.playerId !== args.playerId) {
-        continue;
-      }
-      const key = `${slot.playerId}:${slot.role}:${current.period}`;
-      const existing = totals.get(key);
-      if (existing) {
-        existing.durationMs += duration;
-      } else {
-        totals.set(key, {
-          playerId: slot.playerId,
-          role: slot.role,
-          period: current.period,
-          durationMs: duration,
-        });
-      }
-    }
-  }
-
-  return [...totals.values()];
-}
-
-export interface GoalkeeperStint {
-  playerId: string;
-  period: number;
-  fromMs: number;
-  toMs: number;
-}
-
-export function calculateGoalkeeperStints(args: {
-  snapshots: FormationSnapshot[];
-  periodDurationsMs: number[];
-}): GoalkeeperStint[] {
-  const sorted = sortFormationSnapshots(args.snapshots);
-  const stints: GoalkeeperStint[] = [];
-  for (let index = 0; index < sorted.length; index += 1) {
-    const current = sorted[index];
-    if (!current) {
-      continue;
-    }
-    const goalkeeperId = goalkeeperIdFromSlots(current.slots);
-    if (!goalkeeperId) {
-      continue;
-    }
-    const next = sorted[index + 1];
-    const periodLength = args.periodDurationsMs[current.period - 1] ?? 0;
-    const toMs = next && next.period === current.period ? next.effectiveMatchTimeMs : periodLength;
-    const previous = stints[stints.length - 1];
-    if (
-      previous
-      && previous.playerId === goalkeeperId
-      && previous.period === current.period
-      && previous.toMs === current.effectiveMatchTimeMs
-    ) {
-      previous.toMs = toMs;
-    } else {
-      stints.push({
-        playerId: goalkeeperId,
-        period: current.period,
-        fromMs: current.effectiveMatchTimeMs,
-        toMs,
-      });
-    }
-  }
-  return stints;
 }
 
 export interface LineupChangeReview {

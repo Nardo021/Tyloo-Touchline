@@ -1,6 +1,6 @@
-import type { ClockPhase, MatchClockState } from "./clock.js";
+import type { ClockMode, ClockPhase, MatchClockState } from "./clock.js";
 import type { EventStatus, EventType, MatchEvent } from "./events.js";
-import type { ClockMode, FormationType, TacticalRole } from "./formation.js";
+import type { FormationType, TacticalRole } from "./formation.js";
 import type { MatchPhase } from "./phase.js";
 
 export const MATCH_STATUSES = [
@@ -40,8 +40,8 @@ export interface Match {
   competition: string;
   date: string;
   status: MatchStatus;
-  phase?: MatchPhase;
-  clockMode?: ClockMode;
+  phase: MatchPhase;
+  clockMode: ClockMode;
   startingFormation?: FormationType | null;
   periodDurationsMs?: number[];
   periodCount: number;

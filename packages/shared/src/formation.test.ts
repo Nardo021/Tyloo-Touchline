@@ -4,14 +4,14 @@ import {
   applyDefaultSecondHalfPreset,
   applyGoalkeeperToSlots,
   assignSlotPlayer,
-  calculateGoalkeeperStints,
-  calculateRoleDurations,
   inheritSlotOnSubstitution,
   remapSlotsToFormation,
   resolveHalftimeInitialLineup,
   reviewLineupChange,
-  validateLineupSlots,
+  normalizeFormationType,
+  validateLineup,
 } from "./formation.js";
+import { calculateGoalkeeperStints, calculateRoleDurations } from "./formationDurations.js";
 
 const ids = {
   maxwell: "10000000-0000-4000-8000-000000000006",
@@ -43,7 +43,7 @@ describe("default Tyloo presets", () => {
     expect(preset.onFieldPlayerIds.sort()).toEqual(
       [ids.leo, ids.michael, ids.bobby, ids.adam, ids.benjamin, ids.maxwell].sort(),
     );
-    expect(validateLineupSlots(preset.formation, preset.slots, preset.onFieldPlayerIds, preset.goalkeeperId).ok).toBe(true);
+    expect(validateLineup(preset.formation, preset.slots, preset.onFieldPlayerIds).ok).toBe(true);
   });
 
   it("does not invent a second-half forward", () => {
@@ -52,7 +52,7 @@ describe("default Tyloo presets", () => {
     expect(preset.goalkeeperId).toBe(ids.michael);
     expect(preset.slots.find((slot) => slot.slotId === "FWD_CENTER")?.playerId).toBe("");
     expect(preset.slots.find((slot) => slot.slotId === "MID_LEFT")?.playerId).toBe(ids.maxwell);
-    expect(validateLineupSlots(preset.formation, preset.slots, preset.onFieldPlayerIds, preset.goalkeeperId).ok).toBe(false);
+    expect(validateLineup(preset.formation, preset.slots, preset.onFieldPlayerIds).ok).toBe(false);
   });
 });
 
@@ -62,7 +62,7 @@ describe("slot assignment", () => {
     const duplicated = preset.slots.map((slot) => (
       slot.slotId === "MID_CENTER" ? { ...slot, playerId: ids.leo } : slot
     ));
-    const result = validateLineupSlots(preset.formation, duplicated, preset.onFieldPlayerIds, ids.maxwell);
+    const result = validateLineup(preset.formation, duplicated, preset.onFieldPlayerIds);
     expect(result.ok).toBe(false);
   });
 
@@ -112,7 +112,7 @@ describe("half-time initial lineup", () => {
     expect(initial.onFieldIds.sort()).toEqual(first.onFieldPlayerIds.sort());
     expect(initial.formation).toBe("2-2-1");
     expect(initial.slots.find((slot) => slot.role === "GK")?.playerId).toBe(ids.michael);
-    expect(validateLineupSlots(initial.formation, initial.slots, initial.onFieldIds, ids.michael).ok).toBe(true);
+    expect(validateLineup(initial.formation, initial.slots, initial.onFieldIds).ok).toBe(true);
   });
 
   it("restores a complete HALF_TIME draft", () => {
@@ -145,7 +145,7 @@ describe("formation remap and review", () => {
   it("keeps the same six when remapping 2-1-2 to 2-2-1", () => {
     const first = applyDefaultFirstHalfPreset(players);
     const remapped = remapSlotsToFormation(first.slots, "2-2-1", first.onFieldPlayerIds, ids.michael);
-    const result = validateLineupSlots("2-2-1", remapped, first.onFieldPlayerIds, ids.michael);
+    const result = validateLineup("2-2-1", remapped, first.onFieldPlayerIds);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.goalkeeperId).toBe(ids.michael);
@@ -175,6 +175,7 @@ describe("role duration from snapshots", () => {
           effectiveMatchTimeMs: 0,
           slots: first.slots,
           createdAt: 1,
+          status: "ACTIVE",
         },
         {
           id: "20000000-0000-4000-8000-000000000002",
@@ -184,6 +185,7 @@ describe("role duration from snapshots", () => {
           effectiveMatchTimeMs: 11 * 60 * 1000 + 30_000,
           slots: remapSlotsToFormation(first.slots, "2-2-1", first.onFieldPlayerIds, ids.michael),
           createdAt: 2,
+          status: "ACTIVE",
         },
         {
           id: "20000000-0000-4000-8000-000000000003",
@@ -193,6 +195,7 @@ describe("role duration from snapshots", () => {
           effectiveMatchTimeMs: 16 * 60 * 1000,
           slots: first.slots,
           createdAt: 3,
+          status: "ACTIVE",
         },
         {
           id: "20000000-0000-4000-8000-000000000004",
@@ -202,6 +205,7 @@ describe("role duration from snapshots", () => {
           effectiveMatchTimeMs: 0,
           slots: second,
           createdAt: 4,
+          status: "ACTIVE",
         },
       ],
       playerId: ids.maxwell,
@@ -229,6 +233,7 @@ describe("role duration from snapshots", () => {
           effectiveMatchTimeMs: 0,
           slots: first.slots,
           createdAt: 1,
+          status: "ACTIVE",
         },
         {
           id: "30000000-0000-4000-8000-000000000002",
@@ -238,6 +243,7 @@ describe("role duration from snapshots", () => {
           effectiveMatchTimeMs: 0,
           slots: second,
           createdAt: 2,
+          status: "ACTIVE",
         },
         {
           id: "30000000-0000-4000-8000-000000000003",
@@ -247,6 +253,7 @@ describe("role duration from snapshots", () => {
           effectiveMatchTimeMs: 12 * 60 * 1000,
           slots: late,
           createdAt: 3,
+          status: "ACTIVE",
         },
       ],
       periodDurationsMs: [20 * 60 * 1000, 20 * 60 * 1000],
@@ -256,5 +263,45 @@ describe("role duration from snapshots", () => {
       { playerId: ids.michael, period: 2, fromMs: 0, toMs: 12 * 60 * 1000 },
       { playerId: ids.leo, period: 2, fromMs: 12 * 60 * 1000, toMs: 20 * 60 * 1000 },
     ]);
+  });
+
+  it("ignores voided snapshots", () => {
+    const first = applyDefaultFirstHalfPreset(players);
+    const durations = calculateRoleDurations({
+      snapshots: [
+        {
+          id: "40000000-0000-4000-8000-000000000001",
+          matchId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          period: 1,
+          formation: "2-1-2",
+          effectiveMatchTimeMs: 0,
+          slots: first.slots,
+          createdAt: 1,
+          status: "ACTIVE",
+        },
+        {
+          id: "40000000-0000-4000-8000-000000000002",
+          matchId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          period: 1,
+          formation: "2-2-1",
+          effectiveMatchTimeMs: 5 * 60 * 1000,
+          slots: remapSlotsToFormation(first.slots, "2-2-1", first.onFieldPlayerIds, ids.michael),
+          createdAt: 2,
+          status: "VOIDED",
+        },
+      ],
+      playerId: ids.maxwell,
+      periodDurationsMs: [20 * 60 * 1000],
+    });
+    expect(durations.find((item) => item.role === "GK")?.durationMs).toBe(20 * 60 * 1000);
+  });
+});
+
+describe("normalizeFormationType", () => {
+  it("maps CUSTOM and unknown values to 2-1-2", () => {
+    expect(normalizeFormationType("CUSTOM")).toBe("2-1-2");
+    expect(normalizeFormationType("2-1-2")).toBe("2-1-2");
+    expect(normalizeFormationType("2-2-1")).toBe("2-2-1");
+    expect(normalizeFormationType(undefined)).toBe("2-1-2");
   });
 });

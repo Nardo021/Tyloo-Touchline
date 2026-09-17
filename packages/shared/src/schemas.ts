@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { CLOCK_PHASES } from "./clock.js";
+import { CLOCK_MODES, CLOCK_PHASES } from "./clock.js";
 import { EVENT_STATUSES, EVENT_TYPES } from "./events.js";
-import { CLOCK_MODES, FORMATION_TYPES, TACTICAL_ROLES } from "./formation.js";
+import { normalizeFormationType, TACTICAL_ROLES } from "./formation.js";
 import { MATCH_STATUSES } from "./models.js";
-import { MATCH_PHASES } from "./phase.js";
+import { MATCH_PHASES, matchPhaseFromClock } from "./phase.js";
 
 export const clockStateSchema = z.object({
   running: z.boolean(),
@@ -38,6 +38,10 @@ export const playerSchema = z.object({
   updatedAt: z.number().int(),
 });
 
+const formationTypeSchema = z
+  .enum(["2-1-2", "2-2-1", "CUSTOM"])
+  .transform((value) => normalizeFormationType(value));
+
 export const matchSchema = z.object({
   id: z.string().uuid(),
   teamId: z.string().uuid(),
@@ -47,7 +51,7 @@ export const matchSchema = z.object({
   status: z.enum(MATCH_STATUSES),
   phase: z.enum(MATCH_PHASES).optional(),
   clockMode: z.enum(CLOCK_MODES).optional(),
-  startingFormation: z.enum(FORMATION_TYPES).nullable().optional(),
+  startingFormation: formationTypeSchema.nullable().optional(),
   periodDurationsMs: z.array(z.number().int().nonnegative()).optional(),
   periodCount: z.number().int().min(1).max(8),
   periodLengthMs: z.number().int().min(60_000).max(3_600_000),
@@ -58,7 +62,11 @@ export const matchSchema = z.object({
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),
   startingGoalkeeperId: z.string().uuid().nullable().optional(),
-});
+}).transform((match) => ({
+  ...match,
+  phase: match.phase ?? matchPhaseFromClock(match.clock.phase, match.clock.period),
+  clockMode: match.clockMode ?? "cumulative" as const,
+}));
 
 export const matchRuntimeStateSchema = z.object({
   matchId: z.string().uuid(),
@@ -80,17 +88,18 @@ export const formationSnapshotSchema = z.object({
   id: z.string().uuid(),
   matchId: z.string().uuid(),
   period: z.number().int().positive(),
-  formation: z.enum(FORMATION_TYPES),
+  formation: formationTypeSchema,
   effectiveMatchTimeMs: z.number().int().nonnegative(),
   slots: z.array(lineupSlotSchema),
   createdAt: z.number().int(),
+  status: z.enum(["ACTIVE", "VOIDED"]).optional().default("ACTIVE"),
 });
 
 export const formationPresetSchema = z.object({
   id: z.string().uuid(),
   half: z.union([z.literal(1), z.literal(2)]),
   name: z.string().min(1),
-  formation: z.enum(FORMATION_TYPES),
+  formation: formationTypeSchema,
   slots: z.array(z.object({
     slotId: z.string().min(1),
     role: z.enum(TACTICAL_ROLES),
@@ -104,7 +113,7 @@ export const formationPresetSchema = z.object({
 export const lineupDraftSchema = z.object({
   matchId: z.string().uuid(),
   purpose: z.enum(["PRE_MATCH", "HALF_TIME"]),
-  formation: z.enum(FORMATION_TYPES),
+  formation: formationTypeSchema,
   slots: z.array(lineupSlotSchema),
   onFieldPlayerIds: z.array(z.string().uuid()),
   goalkeeperId: z.string(),

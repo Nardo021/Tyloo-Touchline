@@ -3,9 +3,9 @@ import {
   createId,
   createInitialClock,
   displayedElapsedMs,
-  matchPhaseFromClock,
-  matchStatusFromPhase,
-  type ClockTransitionKind,
+  matchStatusFromRunning,
+  resolveMatchPhase,
+  type ClockTimerKind,
   type Match,
   type MatchClockState,
   type MatchControlEvent,
@@ -34,13 +34,15 @@ export class MatchClockService {
     if (!match) {
       throw toLocalWriteError(new Error("missing"), "That match is no longer on this device.");
     }
+    const phase = extra.phase ?? match.phase ?? resolveMatchPhase(match);
     const next: Match = {
       ...match,
       ...extra,
       clock,
       currentPeriod: clock.period,
-      phase: extra.phase ?? matchPhaseFromClock(clock.phase, clock.period),
-      status: extra.status ?? matchStatusFromPhase(extra.phase ?? matchPhaseFromClock(clock.phase, clock.period), clock.phase),
+      phase,
+      status: extra.status ?? matchStatusFromRunning(phase, clock.running),
+      clockMode: extra.clockMode ?? match.clockMode,
       updatedAt: Date.now(),
     };
     try {
@@ -54,27 +56,19 @@ export class MatchClockService {
     return next;
   }
 
-  async transition(matchId: string, kind: ClockTransitionKind, now = Date.now()): Promise<Match> {
+  async transition(matchId: string, kind: ClockTimerKind, now = Date.now()): Promise<Match> {
     const match = await db.matches.get(matchId);
     if (!match) {
       throw toLocalWriteError(new Error("missing"), "That match is no longer on this device.");
     }
     const clock = applyClockTransition(match.clock, kind, now, match.periodCount);
-    const extra: Partial<Match> = {};
-    if (kind === "START") {
-      extra.startedAt = match.startedAt ?? now;
-    }
-    if (kind === "END_MATCH") {
-      extra.finishedAt = now;
-    }
-    const phase = extra.phase ?? matchPhaseFromClock(clock.phase, clock.period);
+    const phase = match.phase ?? resolveMatchPhase(match);
     const next: Match = {
       ...match,
-      ...extra,
       clock,
       currentPeriod: clock.period,
       phase,
-      status: matchStatusFromPhase(phase, clock.phase),
+      status: matchStatusFromRunning(phase, clock.running),
       updatedAt: now,
     };
     const controlEvent = await this.buildControlEvent(next, kind, now);
@@ -94,7 +88,7 @@ export class MatchClockService {
 
   private async buildControlEvent(
     match: Match,
-    kind: ClockTransitionKind,
+    kind: ClockTimerKind,
     now: number,
   ): Promise<MatchControlEvent | null> {
     const type = controlType(kind);
@@ -116,20 +110,12 @@ export class MatchClockService {
   }
 }
 
-function controlType(kind: ClockTransitionKind): MatchControlEvent["type"] | null {
+function controlType(kind: ClockTimerKind): MatchControlEvent["type"] | null {
   switch (kind) {
-    case "START":
-      return "MATCH_START";
     case "PAUSE":
       return "MATCH_PAUSE";
     case "RESUME":
       return "MATCH_RESUME";
-    case "END_PERIOD":
-      return "PERIOD_END";
-    case "START_NEXT_PERIOD":
-      return "PERIOD_START";
-    case "END_MATCH":
-      return "MATCH_END";
     case "RESET":
       return null;
     default: {

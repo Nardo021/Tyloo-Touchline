@@ -1,25 +1,6 @@
-/**
- * Lineup, goalkeeper role, and on-field history.
- *
- * Clock convention
- * ----------------
- * New matches use a period-local clock. Each half displays 00:00 → 20:00.
- * Event `matchTimeMs` is elapsed time inside `period`:
- * - Period 1 runs from 0 toward `periodLengthMs`.
- * - Half-time lineup changes are stored as period 2, matchTimeMs 0.
- * - Period 2 also runs from 0 toward `periodLengthMs`.
- *
- * Older matches may still store cumulative second-half times (20:00+).
- * Readers infer that convention when a later-period instant is at least
- * one full period length. Pass `clockMode: "period-local"` to force the
- * new representation.
- *
- * Instant ordering is `(period, matchTimeMs, createdAt)`.
- */
-
 import { DEFAULT_PERIOD_LENGTH_MS, MATCH_BENCH_SIZE, MATCH_ON_FIELD_SIZE, MATCH_SQUAD_SIZE } from "./constants.js";
 import { isActiveEvent, isLineupEvent, type MatchEvent } from "./events.js";
-import type { ClockMode } from "./formation.js";
+import type { ClockMode } from "./clock.js";
 import type { MatchPlayer, MatchRuntimeState } from "./models.js";
 
 export interface MatchInstant {
@@ -347,7 +328,7 @@ export function calculatePlayerTimePlayed(args: {
   events: MatchEvent[];
   matchEnd: MatchInstant;
   period?: number;
-  clockMode?: ClockMode;
+  clockMode: ClockMode;
   periodLengthMs?: number;
   periodDurationsMs?: number[];
 }): number {
@@ -391,7 +372,7 @@ export function calculateGoalkeeperTime(args: {
   events: MatchEvent[];
   matchEnd: MatchInstant;
   period?: number;
-  clockMode?: ClockMode;
+  clockMode: ClockMode;
   periodLengthMs?: number;
   periodDurationsMs?: number[];
 }): number {
@@ -456,23 +437,16 @@ export function goalsConcededByPlayer(args: {
 
 export interface DurationOptions {
   periodLengthMs?: number;
-  clockMode?: ClockMode;
+  clockMode: ClockMode;
   periodDurationsMs?: number[];
-}
-
-export function inferClockMode(instants: MatchInstant[], periodLengthMs = DEFAULT_PERIOD_LENGTH_MS): ClockMode {
-  return instants.some((instant) => instant.period > 1 && instant.matchTimeMs >= periodLengthMs)
-    ? "cumulative"
-    : "period-local";
 }
 
 export function periodLocalMatchTimeMs(
   instant: MatchInstant,
   periodLengthMs = DEFAULT_PERIOD_LENGTH_MS,
-  clockMode?: ClockMode,
+  clockMode: ClockMode,
 ): number {
-  const mode = clockMode ?? inferClockMode([instant], periodLengthMs);
-  if (mode === "cumulative" && instant.period > 1) {
+  if (clockMode === "cumulative" && instant.period > 1) {
     return Math.max(0, instant.matchTimeMs - (instant.period - 1) * periodLengthMs);
   }
   return instant.matchTimeMs;
@@ -481,11 +455,10 @@ export function periodLocalMatchTimeMs(
 export function absoluteMatchMs(
   instant: MatchInstant,
   periodLengthMs = DEFAULT_PERIOD_LENGTH_MS,
-  clockMode?: ClockMode,
+  clockMode: ClockMode,
   periodDurationsMs?: number[],
 ): number {
-  const mode = clockMode ?? inferClockMode([instant], periodLengthMs);
-  if (mode === "cumulative") {
+  if (clockMode === "cumulative") {
     return instant.matchTimeMs;
   }
   let total = instant.matchTimeMs;
@@ -495,13 +468,12 @@ export function absoluteMatchMs(
   return total;
 }
 
-export function durationMs(start: MatchInstant, end: MatchInstant, options: DurationOptions = {}): number {
+export function durationMs(start: MatchInstant, end: MatchInstant, options: DurationOptions): number {
   const periodLengthMs = options.periodLengthMs ?? DEFAULT_PERIOD_LENGTH_MS;
-  const clockMode = options.clockMode ?? inferClockMode([start, end], periodLengthMs);
   return Math.max(
     0,
-    absoluteMatchMs(end, periodLengthMs, clockMode, options.periodDurationsMs) -
-      absoluteMatchMs(start, periodLengthMs, clockMode, options.periodDurationsMs),
+    absoluteMatchMs(end, periodLengthMs, options.clockMode, options.periodDurationsMs) -
+      absoluteMatchMs(start, periodLengthMs, options.clockMode, options.periodDurationsMs),
   );
 }
 

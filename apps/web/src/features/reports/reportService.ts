@@ -1,26 +1,25 @@
 import {
   calculateGoalkeeperStints,
+  calculatePeriodStats,
+  deriveMatchReport,
   calculateRoleDurations,
   displayedElapsedMs,
   getFullTimeScore,
   getPeriodResult,
   inferInitialGoalkeeper,
-  resolveMatchPhase,
   sortEventsChronologically,
   sortFormationSnapshots,
   startingSnapshotForPeriod,
   type FormationSnapshot,
+  type GoalkeeperChangeEvent,
   type GoalkeeperStint,
   type Match,
   type MatchEvent,
   type MatchReport,
   type PeriodResult,
-  type GoalkeeperChangeEvent,
-  type PlayerStats,
   type RoleDuration,
   type SubstitutionEvent,
 } from "@tyloo/shared";
-import { calculateMatchStats, calculatePeriodStats } from "@tyloo/shared";
 import { db } from "../../db/database";
 
 export interface PeriodSummary {
@@ -51,12 +50,12 @@ export interface FullMatchSummary {
 export async function buildMatchReport(matchId: string, period?: 1 | 2): Promise<MatchReport> {
   const context = await loadReportContext(matchId);
   if (!context.match) {
-    return calculateMatchStats(context.events, context.playerIds);
+    return deriveMatchReport(context.events, context.playerIds);
   }
   if (period) {
     return calculatePeriodStats(context.events, period, context.playerIds, periodContext(context, period));
   }
-  return calculateMatchStats(context.events, context.playerIds, fullContext(context));
+  return deriveMatchReport(context.events, context.playerIds, fullContext(context));
 }
 
 export async function buildPeriodSummary(matchId: string, period: 1 | 2): Promise<PeriodSummary | null> {
@@ -93,7 +92,7 @@ export async function buildFullMatchSummary(matchId: string): Promise<FullMatchS
   }
   const firstHalfReport = calculatePeriodStats(context.events, 1, context.playerIds, periodContext(context, 1));
   const secondHalfReport = calculatePeriodStats(context.events, 2, context.playerIds, periodContext(context, 2));
-  const combined = calculateMatchStats(context.events, context.playerIds, fullContext(context));
+  const combined = deriveMatchReport(context.events, context.playerIds, fullContext(context));
   return {
     fullTime: getFullTimeScore(context.events),
     firstHalf: getPeriodResult(context.events, 1),
@@ -119,10 +118,6 @@ export async function buildFullMatchSummary(matchId: string): Promise<FullMatchS
     substitutions: context.events.filter((event): event is SubstitutionEvent => event.type === "SUBSTITUTION" && event.status === "ACTIVE"),
     goalkeeperChanges: context.events.filter((event): event is GoalkeeperChangeEvent => event.type === "GOALKEEPER_CHANGE" && event.status === "ACTIVE"),
   };
-}
-
-export function playerStatsById(report: MatchReport, playerId: string): PlayerStats | undefined {
-  return report.players.find((player) => player.playerId === playerId);
 }
 
 interface LoadedContext {
@@ -180,13 +175,14 @@ function periodContext(context: LoadedContext, period: 1 | 2) {
       starterIds: context.starterIds,
       initialGoalkeeperId: context.initialGoalkeeperId,
       matchEnd: { period, matchTimeMs: 0 },
+      clockMode: "period-local" as const,
     };
   }
   return {
     starterIds: context.starterIds,
     initialGoalkeeperId: context.initialGoalkeeperId,
     matchEnd: { period, matchTimeMs: periodDuration(match, period, context.now) },
-    clockMode: match.clockMode ?? "period-local",
+    clockMode: match.clockMode,
     periodLengthMs: match.periodLengthMs,
     periodDurationsMs: match.periodDurationsMs,
   };
@@ -197,15 +193,8 @@ function periodDuration(match: Match, period: 1 | 2, now: number): number {
   if (stored != null) {
     return stored;
   }
-  const phase = resolveMatchPhase(match);
-  if (period === 1 && (phase === "HALF_TIME" || phase === "SECOND_HALF" || phase === "FULL_TIME")) {
-    return match.periodDurationsMs?.[0] ?? match.periodLengthMs;
-  }
   if (match.clock.period === period) {
     return displayedElapsedMs(match.clock, now);
-  }
-  if (match.clock.period > period) {
-    return match.periodLengthMs;
   }
   return 0;
 }

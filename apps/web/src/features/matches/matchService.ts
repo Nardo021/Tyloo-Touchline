@@ -3,7 +3,7 @@ import {
   createInitialClock,
   createMatchRuntimeState,
   DEFAULT_TEAM_ID,
-  validateLineupSlots,
+  validateLineup,
   validateRuntimeState,
   type FormationType,
   type LineupDraft,
@@ -70,7 +70,7 @@ export class MatchPersistence {
       updatedAt: now,
     }));
     if (input.formation && input.slots) {
-      const formationResult = validateLineupSlots(input.formation, input.slots, input.starterIds, input.goalkeeperId);
+      const formationResult = validateLineup(input.formation, input.slots, input.squadIds);
       if (!formationResult.ok) {
         throw toLocalWriteError(new Error(formationResult.errors.join(" ")), formationResult.errors[0] ?? "The starting formation is not valid.");
       }
@@ -118,8 +118,7 @@ export class MatchPersistence {
   }
 
   async unfinished(): Promise<Match | undefined> {
-    const matches = await db.matches.orderBy("updatedAt").reverse().toArray();
-    return matches.find((match) => match.phase !== "FULL_TIME" && match.status !== "FINISHED");
+    return this.active();
   }
 
   async hasInProgressMatch(): Promise<boolean> {

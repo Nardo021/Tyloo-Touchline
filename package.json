@@ -1,7 +1,7 @@
 {
   "name": "touchline",
   "private": true,
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "Touchline - standalone local-first football match recorder for Tyloo FC",
   "engines": {
     "node": ">=22"

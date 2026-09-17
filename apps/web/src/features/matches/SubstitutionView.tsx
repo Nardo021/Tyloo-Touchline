@@ -4,7 +4,6 @@ import {
   assignSlotPlayer,
   inheritSlotOnSubstitution,
   playerShirtLabel,
-  type FormationType,
   type LineupSlot,
   type Player,
 } from "@tyloo/shared";
@@ -17,7 +16,6 @@ export function SubstitutionView({
   bench,
   goalkeeperId,
   matchTimeMs,
-  formation: _formation,
   slots,
   onSave,
   onCancel,
@@ -26,7 +24,6 @@ export function SubstitutionView({
   bench: Player[];
   goalkeeperId: string | null;
   matchTimeMs: number;
-  formation?: FormationType; // used by callers to describe the current shape
   slots?: LineupSlot[];
   onSave: (playerOffId: string, playerOnId: string, nextGoalkeeperId?: string, nextSlots?: LineupSlot[]) => void;
   onCancel: () => void;

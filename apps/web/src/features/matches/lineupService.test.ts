@@ -1,6 +1,10 @@
 import {
+  applyClockTransition,
+  applyDefaultFirstHalfPreset,
+  createFormationSnapshot,
   createId,
   DEFAULT_TEAM_ID,
+  remapSlotsToFormation,
   type Match,
   type MatchPlayer,
   type Player,
@@ -9,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { db } from "../../db/database";
 import { setDeviceName } from "../../lib/device";
 import { clockService } from "../clock/clockService";
+import { lifecycleService } from "./lifecycleService";
 import { lineupService } from "./lineupService";
 
 const matchId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -168,10 +173,21 @@ describe("LineupService", () => {
     await db.open();
     await seed("HALFTIME");
     const secondHalf = [ids.maxwell, ids.leo, ids.allen, ids.michael, ids.david, ids.adam];
-    const result = await lineupService.startNextPeriod({
+    const first = applyDefaultFirstHalfPreset([
+      { id: ids.maxwell, number: 6 },
+      { id: ids.leo, number: 11 },
+      { id: ids.allen, number: 9 },
+      { id: ids.bobby, number: 10 },
+      { id: ids.david, number: 8 },
+      { id: ids.michael, number: 7 },
+      { id: ids.adam, number: 5 },
+      { id: ids.benjamin, number: 18 },
+    ]);
+    const slots = remapSlotsToFormation(first.slots, "2-2-1", secondHalf, ids.leo);
+    const result = await lifecycleService.startSecondHalf({
       matchId,
-      nextOnFieldIds: secondHalf,
-      nextGoalkeeperId: ids.leo,
+      formation: "2-2-1",
+      slots,
       pairs: [
         { playerOffId: ids.bobby, playerOnId: ids.michael },
         { playerOffId: ids.benjamin, playerOnId: ids.adam },
@@ -204,6 +220,46 @@ describe("LineupService", () => {
     expect(events.filter((event) => event.status === "ACTIVE")).toHaveLength(2);
   });
 
+  it("voids the snapshot created by an undone lineup change", async () => {
+    const slots = remapSlotsToFormation(
+      applyDefaultFirstHalfPreset([
+        { id: ids.maxwell, number: 6 },
+        { id: ids.leo, number: 11 },
+        { id: ids.allen, number: 9 },
+        { id: ids.bobby, number: 10 },
+        { id: ids.david, number: 8 },
+        { id: ids.michael, number: 7 },
+        { id: ids.adam, number: 5 },
+        { id: ids.benjamin, number: 18 },
+      ]).slots,
+      "2-1-2",
+      firstHalf,
+      ids.benjamin,
+    );
+    const initial = createFormationSnapshot({
+      id: createId(),
+      matchId,
+      period: 1,
+      formation: "2-1-2",
+      effectiveMatchTimeMs: 0,
+      slots,
+      createdAt: 1,
+    });
+    await db.formationSnapshots.put(initial);
+    await db.matchRuntimeStates.update(matchId, { formationSnapshotId: initial.id });
+    const changed = await lifecycleService.changeLineup({
+      matchId,
+      formation: "2-2-1",
+      slots: remapSlotsToFormation(slots, "2-2-1", firstHalf, ids.benjamin),
+    });
+    const event = changed.events[0];
+    if (!event || !changed.snapshot) {
+      throw new Error("expected lineup change");
+    }
+    await lineupService.voidIfLatestLineupChange(event);
+    expect((await db.formationSnapshots.get(changed.snapshot.id))?.status).toBe("VOIDED");
+  });
+
   it("only reverts the latest lineup change on undo", async () => {
     const first = await lineupService.recordSubstitution(matchId, ids.leo, ids.adam);
     const second = await lineupService.recordGoalkeeperChange(matchId, ids.allen);
@@ -234,9 +290,15 @@ describe("clock stays local after lineup writes", () => {
   });
 
   it("can still start and persist the clock", async () => {
-    await clockService.transition(matchId, "START", 10_000);
-    const clock = await clockService.getClock(matchId);
-    expect(clock.running).toBe(true);
-    expect(clock.lastStartedAt).toBe(10_000);
+    const stored = await db.matches.get(matchId);
+    if (!stored) {
+      throw new Error("expected match");
+    }
+    const clock = applyClockTransition(stored.clock, "START", 10_000, stored.periodCount);
+    await clockService.persist(matchId, clock, { phase: "FIRST_HALF", startedAt: 10_000 });
+    const next = await clockService.getClock(matchId);
+    expect(next.running).toBe(true);
+    expect(next.lastStartedAt).toBe(10_000);
+    expect((await db.matches.get(matchId))?.phase).toBe("FIRST_HALF");
   });
 });

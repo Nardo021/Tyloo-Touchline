@@ -1,4 +1,4 @@
-import { clockPhaseLabel, deriveScore, formatMatchTime, resolveMatchPhase, resumePathForPhase } from "@tyloo/shared";
+import { clockPhaseLabel, deriveScore, formatMatchTime, resolveMatchPhase, resumePathForPhase, type MatchEvent } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -85,9 +85,7 @@ export function HomePage() {
   );
 }
 
-function scoreLine(matchId: string, events: Array<{ matchId: string; type: string; status: string }>): string {
-  const score = deriveScore(
-    events.filter((event) => event.matchId === matchId) as never,
-  );
+function scoreLine(matchId: string, events: MatchEvent[]): string {
+  const score = deriveScore(events.filter((event) => event.matchId === matchId));
   return `${score.for}–${score.against}`;
 }

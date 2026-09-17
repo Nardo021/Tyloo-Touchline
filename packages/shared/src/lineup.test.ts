@@ -291,6 +291,7 @@ describe("time played", () => {
       starterIds: firstHalfField,
       events,
       matchEnd: { period: 2, matchTimeMs: 40 * 60 * 1000 },
+      clockMode: "cumulative",
     });
     expect(played).toBe(32 * 60 * 1000);
   });
@@ -307,12 +308,14 @@ describe("goalkeeper duration", () => {
       initialGoalkeeperId: ids.benjamin,
       events,
       matchEnd,
+      clockMode: "cumulative",
     })).toBe(20 * 60 * 1000);
     expect(calculateGoalkeeperTime({
       playerId: ids.leo,
       initialGoalkeeperId: ids.benjamin,
       events,
       matchEnd,
+      clockMode: "cumulative",
     })).toBe(20 * 60 * 1000);
   });
 
@@ -334,12 +337,14 @@ describe("goalkeeper duration", () => {
       initialGoalkeeperId: ids.benjamin,
       events,
       matchEnd,
+      clockMode: "cumulative",
     })).toBe(12 * 60 * 1000 + 30_000 + 15 * 60 * 1000);
     expect(calculateGoalkeeperTime({
       playerId: ids.leo,
       initialGoalkeeperId: ids.benjamin,
       events,
       matchEnd,
+      clockMode: "cumulative",
     })).toBe(25 * 60 * 1000 - (12 * 60 * 1000 + 30_000));
   });
 });

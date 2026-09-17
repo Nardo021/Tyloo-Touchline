@@ -1,4 +1,5 @@
 import {
+  defaultSecondHalfPreset,
   deriveLineupChanges,
   MATCH_ON_FIELD_SIZE,
   playerShirtLabel,
@@ -6,7 +7,7 @@ import {
   resolveHalftimeInitialLineup,
   reviewLineupChange,
   swapPairOnPlayer,
-  validateLineupSlots,
+  validateLineup,
   validateRuntimeState,
   type FormationType,
   type LineupSlot,
@@ -22,6 +23,7 @@ import { db, defaultAppSettings, getSetting, SETTING_KEYS } from "../db/database
 import { LineupEditor } from "../features/matches/LineupEditor";
 import { LineupRoleList } from "../features/matches/LineupOverlay";
 import { lifecycleService } from "../features/matches/lifecycleService";
+import { lineupService } from "../features/matches/lineupService";
 import { presetService } from "../features/presets/presetService";
 import { LocalWriteError } from "../lib/localWrite";
 
@@ -38,7 +40,7 @@ export function HalfTimeSetupPage() {
     [runtime?.formationSnapshotId],
   );
   const settings = useLiveQuery(() => getSetting(SETTING_KEYS.appSettings, defaultAppSettings()), []);
-  const secondPreset = useLiveQuery(() => presetService.getForHalf(2), []);
+  const presets = useLiveQuery(() => db.formationPresets.toArray(), []);
 
   const [step, setStep] = useState(1);
   const [onFieldIds, setOnFieldIds] = useState<string[]>([]);
@@ -67,21 +69,20 @@ export function HalfTimeSetupPage() {
     onFieldPlayerIds: onFieldIds,
     goalkeeperId,
   });
-  const formationValid = validateLineupSlots(formation, slots, onFieldIds, goalkeeperId);
+  const formationValid = validateLineup(formation, slots, squad.map((player) => player.id));
   const canStart = runtimeValid.ok && formationValid.ok;
 
   useEffect(() => {
-    if (!id || ready || squad.length === 0 || secondPreset === undefined) {
+    if (!id || ready || squad.length === 0 || presets === undefined) {
       return;
     }
     if (runtime?.formationSnapshotId && previousSnapshot === undefined) {
       return;
     }
-    if (!draft || draft.purpose !== "HALF_TIME" || draft.onFieldPlayerIds.filter(Boolean).length !== MATCH_ON_FIELD_SIZE) {
-      if (previousOnField.length === 0) {
-        return;
-      }
+    if (previousOnField.length === 0 && !draft) {
+      return;
     }
+    const secondPreset = presets.find((preset) => preset.half === 2) ?? defaultSecondHalfPreset(0);
     const presetSlots = presetService.slotsForPlayers(secondPreset, squad);
     const initial = resolveHalftimeInitialLineup({
       draft,
@@ -96,14 +97,14 @@ export function HalfTimeSetupPage() {
     setSlots(initial.slots);
     setPairs(deriveLineupChanges(previousOnField, initial.onFieldIds).pairs);
     setReady(true);
-  }, [draft, id, previousOnField, previousSnapshot, ready, runtime, secondPreset, squad]);
+  }, [draft, id, previousOnField, previousSnapshot, presets, ready, runtime, squad]);
 
   useEffect(() => {
     if (!id || !ready || onFieldIds.length === 0) {
       return;
     }
     const timeout = window.setTimeout(() => {
-      void lifecycleService.saveDraft({
+      void lineupService.saveDraft({
         matchId: id,
         purpose: "HALF_TIME",
         formation,
@@ -185,9 +186,9 @@ export function HalfTimeSetupPage() {
         </section>
       ) : null}
 
-      {step === 2 || step === 3 ? (
+      {step === 2 ? (
         <section className="flex flex-col gap-4">
-          <h2 className="text-2xl font-bold">{step === 2 ? "Second-half formation" : "Tactical lineup"}</h2>
+          <h2 className="text-2xl font-bold">Second-half formation</h2>
           <LineupEditor
             formation={formation}
             slots={slots}
@@ -198,15 +199,15 @@ export function HalfTimeSetupPage() {
             }}
           />
           <div className="flex gap-3">
-            <Button onClick={() => setStep(step === 2 ? 1 : 2)}>Back</Button>
-            <Button variant="primary" disabled={!formationValid.ok} onClick={() => setStep(4)}>
+            <Button onClick={() => setStep(1)}>Back</Button>
+            <Button variant="primary" disabled={!formationValid.ok} onClick={() => setStep(3)}>
               Continue to review
             </Button>
           </div>
         </section>
       ) : null}
 
-      {step === 4 ? (
+      {step === 3 ? (
         <section className="flex flex-col gap-5">
           <h2 className="text-2xl font-bold">Second half review</h2>
           <article className="rounded-lg border-2 border-border bg-surface p-4">
@@ -267,7 +268,7 @@ export function HalfTimeSetupPage() {
             </p>
           ) : null}
           <div className="flex gap-3">
-            <Button onClick={() => setStep(3)}>Back</Button>
+            <Button onClick={() => setStep(2)}>Back</Button>
             <Button
               variant="primary"
               disabled={!canStart}

@@ -6,7 +6,7 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify("1.0.0-test"),
+    __APP_VERSION__: JSON.stringify("3.0.0-test"),
   },
   resolve: {
     alias: {

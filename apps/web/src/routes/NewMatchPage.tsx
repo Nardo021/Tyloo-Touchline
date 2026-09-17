@@ -6,7 +6,7 @@ import {
   MATCH_SQUAD_SIZE,
   playerShirtLabel,
   remapSlotsToFormation,
-  validateLineupSlots,
+  validateLineup,
   validateRuntimeState,
   type FormationType,
   type LineupSlot,
@@ -77,7 +77,7 @@ export function NewMatchPage() {
     onFieldPlayerIds: starterIds,
     goalkeeperId,
   });
-  const formationValidation = validateLineupSlots(formation, slots, starterIds, goalkeeperId);
+  const formationValidation = validateLineup(formation, slots, squadIds);
 
   function toggleSquad(id: string) {
     setSquadIds((current) => {

@@ -1,5 +1,5 @@
 import { isActiveEvent, type MatchEvent } from "./events.js";
-import type { ClockMode } from "./formation.js";
+import type { ClockMode } from "./clock.js";
 import {
   calculateGoalkeeperTime,
   calculatePlayerTimePlayed,
@@ -35,7 +35,7 @@ export interface MatchReportContext {
   initialGoalkeeperId?: string | null;
   matchEnd: MatchInstant;
   period?: 1 | 2;
-  clockMode?: ClockMode;
+  clockMode: ClockMode;
   periodLengthMs?: number;
   periodDurationsMs?: number[];
 }
@@ -44,13 +44,6 @@ export interface PeriodResult {
   period: 1 | 2;
   goalsFor: number;
   goalsAgainst: number;
-}
-
-export interface StatsQuery {
-  events: MatchEvent[];
-  playerIds?: string[];
-  period?: 1 | 2;
-  context?: MatchReportContext;
 }
 
 export interface TeamStats {
@@ -309,35 +302,19 @@ export function deriveMatchReport(
   };
 }
 
-export function calculateMatchStats(
-  events: MatchEvent[],
-  playerIds: string[] = [],
-  context?: MatchReportContext,
-): MatchReport {
-  return deriveMatchReport(events, playerIds, context);
-}
-
 export function calculatePeriodStats(
   events: MatchEvent[],
   period: 1 | 2,
   playerIds: string[] = [],
   context?: Omit<MatchReportContext, "period">,
 ): MatchReport {
-  return deriveMatchReport(events, playerIds, context ? { ...context, period } : { starterIds: [], matchEnd: { period, matchTimeMs: 0 }, period });
-}
-
-export function calculateStats(query: StatsQuery): MatchReport {
-  return deriveMatchReport(query.events, query.playerIds ?? [], query.context ? { ...query.context, period: query.period ?? query.context.period } : query.period ? { starterIds: [], matchEnd: { period: query.period, matchTimeMs: 0 }, period: query.period } : undefined);
-}
-
-export function calculatePlayerStats(args: {
-  events: MatchEvent[];
-  playerId: string;
-  period?: 1 | 2;
-  context?: MatchReportContext;
-}): PlayerStats {
-  const report = deriveMatchReport(args.events, [args.playerId], args.context ? { ...args.context, period: args.period ?? args.context.period } : args.period ? { starterIds: [], matchEnd: { period: args.period, matchTimeMs: 0 }, period: args.period } : undefined);
-  return report.players[0] ?? emptyPlayerStats(args.playerId);
+  return deriveMatchReport(
+    events,
+    playerIds,
+    context
+      ? { ...context, period }
+      : { starterIds: [], matchEnd: { period, matchTimeMs: 0 }, period, clockMode: "period-local" },
+  );
 }
 
 export function deriveScore(events: MatchEvent[]): { for: number; against: number } {

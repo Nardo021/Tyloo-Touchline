@@ -4,7 +4,7 @@ import {
   FORMATION_TYPES,
   playerShirtLabel,
   remapSlotsToFormation,
-  validateLineupSlots,
+  validateLineup,
   type FormationType,
   type LineupSlot,
   type Player,
@@ -27,11 +27,10 @@ export function LineupEditor({
   onChange: (formation: FormationType, slots: LineupSlot[]) => void;
 }) {
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
-  const validation = validateLineupSlots(
+  const validation = validateLineup(
     formation,
     slots,
     onField.map((player) => player.id),
-    slots.find((slot) => slot.role === "GK")?.playerId ?? null,
   );
 
   function selectFormation(next: FormationType) {
@@ -47,7 +46,7 @@ export function LineupEditor({
     <div className="flex flex-col gap-5">
       <section>
         <h2 className="mb-3 text-xl font-bold uppercase tracking-wide">Formation</h2>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           {FORMATION_TYPES.map((item) => (
             <Button
               key={item}

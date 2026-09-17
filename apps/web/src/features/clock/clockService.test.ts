@@ -12,14 +12,16 @@ function seedMatch(): Match {
     opponent: "Riverside",
     competition: "NSFA Summer",
     date: "2026-09-17",
-    status: "NOT_STARTED",
+    status: "RUNNING",
+    phase: "FIRST_HALF",
+    clockMode: "period-local",
     periodCount: 2,
     periodLengthMs: 1_200_000,
     currentPeriod: 1,
-    clock: { running: false, accumulatedMs: 0, lastStartedAt: null, period: 1, phase: "NOT_STARTED" },
+    clock: { running: true, accumulatedMs: 0, lastStartedAt: 10_000, period: 1, phase: "RUNNING" },
     createdAt: 1,
     updatedAt: 1,
-    startedAt: null,
+    startedAt: 10_000,
     finishedAt: null,
   };
 }
@@ -29,35 +31,29 @@ describe("MatchClockService persistence", () => {
     await db.delete();
     await db.open();
     await db.settings.put({ key: "deviceId", value: createId() });
-    await db.matches.put(seedMatch());
+    const match = seedMatch();
+    await db.matches.put(match);
+    await db.clockStates.put({ ...match.clock, matchId, updatedAt: 1 });
   });
 
   afterEach(async () => {
     await db.delete();
   });
 
-  it("persists start/pause/resume and reconstructs elapsed time", async () => {
-    await clockService.transition(matchId, "START", 10_000);
+  it("persists pause/resume without rewriting match phase", async () => {
     await clockService.transition(matchId, "PAUSE", 20_000);
     const paused = await clockService.getClock(matchId);
     expect(paused.accumulatedMs).toBe(10_000);
     expect(paused.running).toBe(false);
+    expect((await db.matches.get(matchId))?.phase).toBe("FIRST_HALF");
 
     await clockService.transition(matchId, "RESUME", 40_000);
     const running = await clockService.getClock(matchId);
     expect(clockService.displayedMs(running, 50_000)).toBe(20_000);
-  });
-
-  it("moves to half-time on period end", async () => {
-    await clockService.transition(matchId, "START", 0);
-    await clockService.transition(matchId, "END_PERIOD", 1_200_000);
-    const clock = await clockService.getClock(matchId);
-    expect(clock.phase).toBe("HALFTIME");
-    expect(clock.period).toBe(1);
+    expect((await db.matches.get(matchId))?.phase).toBe("FIRST_HALF");
   });
 
   it("reconstructs a running clock after the database is reopened", async () => {
-    await clockService.transition(matchId, "START", 10_000);
     db.close();
     await db.open();
     const clock = await clockService.getClock(matchId);

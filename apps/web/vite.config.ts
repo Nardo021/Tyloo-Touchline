@@ -7,7 +7,7 @@ import { VitePWA } from "vite-plugin-pwa";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(rootDir, "../..");
-const appVersion = process.env.npm_package_version ?? "1.0.0";
+const appVersion = process.env.npm_package_version ?? "3.0.0";
 
 export default defineConfig({
   define: {
