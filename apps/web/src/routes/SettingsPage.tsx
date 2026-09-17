@@ -7,7 +7,7 @@ import {
   type TouchlineBackup,
 } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "../components/ui/Button";
 import { Dialog } from "../components/ui/Dialog";
 import { Field, Input } from "../components/ui/Field";
@@ -41,8 +41,14 @@ export function SettingsPage() {
     const all = await db.players.toArray();
     return all.filter((player) => player.active).sort((a, b) => a.number - b.number);
   }, []) ?? [];
-  const presets = useLiveQuery(() => presetService.list(), []) ?? [];
+  const presets = (useLiveQuery(() => db.formationPresets.toArray(), []) ?? [])
+    .slice()
+    .sort((left, right) => left.half - right.half);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    void presetService.ensureSeeded();
+  }, []);
 
   useLiveQuery(async () => {
     const name = await getDeviceName();

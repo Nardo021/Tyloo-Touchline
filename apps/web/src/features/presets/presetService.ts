@@ -16,16 +16,24 @@ import { toLocalWriteError } from "../../lib/localWrite";
 export class PresetService {
   async list(): Promise<FormationPreset[]> {
     const stored = await db.formationPresets.toArray();
+    return stored.sort((left, right) => left.half - right.half);
+  }
+
+  async ensureSeeded(): Promise<void> {
+    const stored = await db.formationPresets.toArray();
     if (stored.length > 0) {
-      return stored.sort((left, right) => left.half - right.half);
+      return;
     }
     const now = Date.now();
-    const seeded = [defaultFirstHalfPreset(now), defaultSecondHalfPreset(now)];
-    await db.formationPresets.bulkPut(seeded);
-    return seeded;
+    try {
+      await db.formationPresets.bulkPut([defaultFirstHalfPreset(now), defaultSecondHalfPreset(now)]);
+    } catch (error) {
+      throw toLocalWriteError(error, "The lineup presets were not written to this iPad.");
+    }
   }
 
   async getForHalf(half: 1 | 2): Promise<FormationPreset> {
+    await this.ensureSeeded();
     const presets = await this.list();
     const found = presets.find((preset) => preset.half === half);
     return found ?? (half === 1 ? defaultFirstHalfPreset(Date.now()) : defaultSecondHalfPreset(Date.now()));
