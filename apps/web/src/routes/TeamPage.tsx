@@ -16,6 +16,7 @@ export function TeamPage() {
   const [number, setNumber] = useState("");
   const [name, setName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function onSave(event: FormEvent) {
@@ -31,9 +32,7 @@ export function TeamPage() {
         name,
         active: true,
       });
-      setNumber("");
-      setName("");
-      setEditingId(null);
+      resetEditor();
     } catch (err) {
       const write = err instanceof LocalWriteError ? err : null;
       setError(write?.message ?? "The player was not written to this iPad.");
@@ -41,10 +40,31 @@ export function TeamPage() {
     }
   }
 
+  function resetEditor() {
+    setNumber("");
+    setName("");
+    setEditingId(null);
+  }
+
+  async function onDelete(playerId: string) {
+    setError(null);
+    try {
+      await playerService.remove(playerId);
+      if (editingId === playerId) {
+        resetEditor();
+      }
+      setPendingDeleteId(null);
+    } catch (err) {
+      const write = err instanceof LocalWriteError ? err : null;
+      setError(write?.message ?? "The player was not deleted from this iPad.");
+      markStorageUnavailable(write?.message);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-3xl font-bold">Team</h1>
-      <p>Add shirt numbers and names. Goalkeeper is a match role, not a permanent player setting.</p>
+      <p>Add shirt numbers and names. Deactivate a player to keep them out of new matches, then delete them if they are not needed.</p>
       {error ? <p className="font-semibold text-danger" role="alert">{error}</p> : null}
 
       <form className="grid max-w-3xl gap-4 md:grid-cols-3" onSubmit={(event) => void onSave(event)}>
@@ -97,6 +117,20 @@ export function TeamPage() {
                 >
                   {player.active ? "Deactivate" : "Activate"}
                 </Button>
+                {!player.active ? (
+                  pendingDeleteId === player.id ? (
+                    <>
+                      <Button onClick={() => setPendingDeleteId(null)}>Cancel</Button>
+                      <Button variant="danger" onClick={() => void onDelete(player.id)}>
+                        Confirm delete
+                      </Button>
+                    </>
+                  ) : (
+                    <Button variant="danger" onClick={() => setPendingDeleteId(player.id)}>
+                      Delete
+                    </Button>
+                  )
+                ) : null}
               </div>
             </li>
           ))}

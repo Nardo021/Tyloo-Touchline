@@ -1,6 +1,6 @@
-import { createId, DEFAULT_TEAM_ID, type Player } from "@tyloo/shared";
+import { createId, DEFAULT_TEAM_ID, resolveMatchPhase, type Player } from "@tyloo/shared";
 import { db } from "../../db/database";
-import { toLocalWriteError } from "../../lib/localWrite";
+import { LocalWriteError, toLocalWriteError } from "../../lib/localWrite";
 
 export class PlayerService {
   async listActive(): Promise<Player[]> {
@@ -36,6 +36,34 @@ export class PlayerService {
 
   async byId(id: string): Promise<Player | undefined> {
     return db.players.get(id);
+  }
+
+  async remove(id: string): Promise<void> {
+    const existing = await db.players.get(id);
+    if (!existing) {
+      throw new LocalWriteError("That player is no longer on this iPad.", false);
+    }
+    if (existing.active) {
+      throw new LocalWriteError("Deactivate the player before deleting.", false);
+    }
+
+    const assignments = await db.matchPlayers.where("playerId").equals(id).toArray();
+    if (assignments.length > 0) {
+      const matchIds = [...new Set(assignments.map((item) => item.matchId))];
+      const matches = await db.matches.bulkGet(matchIds);
+      const inUnfinishedMatch = matches.some(
+        (match) => match && resolveMatchPhase(match) !== "FULL_TIME" && match.status !== "FINISHED",
+      );
+      if (inUnfinishedMatch) {
+        throw new LocalWriteError("This player is still in an unfinished match.", false);
+      }
+    }
+
+    try {
+      await db.players.delete(id);
+    } catch (error) {
+      throw toLocalWriteError(error, "The player was not deleted from this iPad.");
+    }
   }
 
   nameMap(players: Player[]): Map<string, string> {
