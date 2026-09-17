@@ -13,7 +13,7 @@ export class PlayerService {
     return players.sort((a, b) => a.number - b.number);
   }
 
-  async save(input: { id?: string; number: number; name: string; position: string | null; active: boolean }): Promise<Player> {
+  async save(input: { id?: string; number: number; name: string; position?: string | null; active: boolean }): Promise<Player> {
     const now = Date.now();
     const existing = input.id ? await db.players.get(input.id) : undefined;
     const player: Player = {
@@ -21,7 +21,7 @@ export class PlayerService {
       teamId: existing?.teamId ?? DEFAULT_TEAM_ID,
       number: input.number,
       name: input.name.trim(),
-      position: input.position?.trim() || null,
+      position: input.position?.trim() || existing?.position || null,
       active: input.active,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,

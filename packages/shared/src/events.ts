@@ -21,6 +21,9 @@ export const TEAM_EVENT_TYPES = ["CORNER_FOR", "CORNER_AGAINST", "GOAL_AGAINST"]
 
 export const CONTROL_EVENT_TYPES = [
   "SUBSTITUTION",
+  "GOALKEEPER_CHANGE",
+  "FORMATION_CHANGE",
+  "LINEUP_CHANGE",
   "MATCH_START",
   "MATCH_PAUSE",
   "MATCH_RESUME",
@@ -133,11 +136,47 @@ export interface GoalAgainstEvent extends BaseEvent {
   playerId: null;
 }
 
-export interface SubstitutionEvent extends BaseEvent {
-  type: "SUBSTITUTION";
-  playerId: null;
+export interface SubstitutionMetadata {
   playerOffId: string;
   playerOnId: string;
+}
+
+export interface SubstitutionEvent extends BaseEvent, SubstitutionMetadata {
+  type: "SUBSTITUTION";
+  playerId: null;
+}
+
+export interface GoalkeeperChangeMetadata {
+  previousGoalkeeperId: string;
+  newGoalkeeperId: string;
+}
+
+export interface GoalkeeperChangeEvent extends BaseEvent, GoalkeeperChangeMetadata {
+  type: "GOALKEEPER_CHANGE";
+  playerId: null;
+}
+
+export interface FormationChangeMetadata {
+  previousFormation: string;
+  newFormation: string;
+  previousSnapshotId: string;
+  newSnapshotId: string;
+}
+
+export interface FormationChangeEvent extends BaseEvent, FormationChangeMetadata {
+  type: "FORMATION_CHANGE";
+  playerId: null;
+}
+
+export interface LineupChangeMetadata {
+  formation: string;
+  previousSnapshotId: string;
+  newSnapshotId: string;
+}
+
+export interface LineupChangeEvent extends BaseEvent, LineupChangeMetadata {
+  type: "LINEUP_CHANGE";
+  playerId: null;
 }
 
 export interface MatchControlEvent extends BaseEvent {
@@ -163,11 +202,35 @@ export type MatchEvent =
   | CornerAgainstEvent
   | GoalAgainstEvent
   | SubstitutionEvent
+  | GoalkeeperChangeEvent
+  | FormationChangeEvent
+  | LineupChangeEvent
   | MatchControlEvent;
+
+export function isLineupEvent(
+  event: MatchEvent,
+): event is SubstitutionEvent | GoalkeeperChangeEvent | FormationChangeEvent | LineupChangeEvent {
+  return (
+    event.type === "SUBSTITUTION" ||
+    event.type === "GOALKEEPER_CHANGE" ||
+    event.type === "FORMATION_CHANGE" ||
+    event.type === "LINEUP_CHANGE"
+  );
+}
 
 export function isPlayerEvent(
   event: MatchEvent,
-): event is Exclude<MatchEvent, CornerForEvent | CornerAgainstEvent | GoalAgainstEvent | SubstitutionEvent | MatchControlEvent> {
+): event is Exclude<
+  MatchEvent,
+  | CornerForEvent
+  | CornerAgainstEvent
+  | GoalAgainstEvent
+  | SubstitutionEvent
+  | GoalkeeperChangeEvent
+  | FormationChangeEvent
+  | LineupChangeEvent
+  | MatchControlEvent
+> {
   return event.playerId !== null && event.playerId !== undefined;
 }
 

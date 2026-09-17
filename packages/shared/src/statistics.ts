@@ -1,4 +1,14 @@
 import { isActiveEvent, type MatchEvent } from "./events.js";
+import type { ClockMode } from "./formation.js";
+import {
+  calculateGoalkeeperTime,
+  calculatePlayerTimePlayed,
+  goalkeeperAtPeriodStart,
+  goalsConcededByPlayer,
+  inferInitialGoalkeeper,
+  lineupAtPeriodStart,
+  type MatchInstant,
+} from "./lineup.js";
 
 export interface PlayerStats {
   playerId: string;
@@ -15,6 +25,32 @@ export interface PlayerStats {
   keyDefences: number;
   interceptions: number;
   ownGoals: number;
+  timePlayedMs: number;
+  goalkeeperTimeMs: number;
+  goalsConceded: number;
+}
+
+export interface MatchReportContext {
+  starterIds: string[];
+  initialGoalkeeperId?: string | null;
+  matchEnd: MatchInstant;
+  period?: 1 | 2;
+  clockMode?: ClockMode;
+  periodLengthMs?: number;
+  periodDurationsMs?: number[];
+}
+
+export interface PeriodResult {
+  period: 1 | 2;
+  goalsFor: number;
+  goalsAgainst: number;
+}
+
+export interface StatsQuery {
+  events: MatchEvent[];
+  playerIds?: string[];
+  period?: 1 | 2;
+  context?: MatchReportContext;
 }
 
 export interface TeamStats {
@@ -56,6 +92,9 @@ function emptyPlayerStats(playerId: string): PlayerStats {
     keyDefences: 0,
     interceptions: 0,
     ownGoals: 0,
+    timePlayedMs: 0,
+    goalkeeperTimeMs: 0,
+    goalsConceded: 0,
   };
 }
 
@@ -181,6 +220,9 @@ export function applyEventToStats(
       team.goalsAgainst += 1;
       return;
     case "SUBSTITUTION":
+    case "GOALKEEPER_CHANGE":
+    case "FORMATION_CHANGE":
+    case "LINEUP_CHANGE":
     case "MATCH_START":
     case "MATCH_PAUSE":
     case "MATCH_RESUME":
@@ -195,14 +237,69 @@ export function applyEventToStats(
   }
 }
 
-export function deriveMatchReport(events: MatchEvent[], playerIds: string[] = []): MatchReport {
+export function eventsForPeriod(events: MatchEvent[], period?: 1 | 2): MatchEvent[] {
+  if (period == null) {
+    return events;
+  }
+  return events.filter((event) => event.period === period);
+}
+
+export function deriveMatchReport(
+  events: MatchEvent[],
+  playerIds: string[] = [],
+  context?: MatchReportContext,
+): MatchReport {
+  const scopedEvents = eventsForPeriod(events, context?.period);
   const team = emptyTeamStats();
   const players = new Map<string, PlayerStats>();
   for (const playerId of playerIds) {
     players.set(playerId, emptyPlayerStats(playerId));
   }
-  for (const event of events) {
+  for (const event of scopedEvents) {
     applyEventToStats(event, team, players);
+  }
+  if (context) {
+    const period = context.period;
+    const starterIds = period
+      ? lineupAtPeriodStart({ starterIds: context.starterIds, events, period })
+      : context.starterIds;
+    const initialGoalkeeperId = period
+      ? goalkeeperAtPeriodStart({
+          initialGoalkeeperId: context.initialGoalkeeperId ?? inferInitialGoalkeeper(events, null),
+          events,
+          period,
+        })
+      : (context.initialGoalkeeperId ?? inferInitialGoalkeeper(events, null));
+    const ids = playerIds.length > 0 ? playerIds : [...players.keys()];
+    for (const playerId of ids) {
+      const stats = playerBucket(players, playerId);
+      stats.timePlayedMs = calculatePlayerTimePlayed({
+        playerId,
+        starterIds,
+        events,
+        matchEnd: context.matchEnd,
+        period,
+        clockMode: context.clockMode,
+        periodLengthMs: context.periodLengthMs,
+        periodDurationsMs: context.periodDurationsMs,
+      });
+      stats.goalkeeperTimeMs = calculateGoalkeeperTime({
+        playerId,
+        initialGoalkeeperId,
+        events,
+        matchEnd: context.matchEnd,
+        period,
+        clockMode: context.clockMode,
+        periodLengthMs: context.periodLengthMs,
+        periodDurationsMs: context.periodDurationsMs,
+      });
+      stats.goalsConceded = goalsConcededByPlayer({
+        playerId,
+        initialGoalkeeperId,
+        events,
+        period,
+      });
+    }
   }
   return {
     scoreFor: team.goalsFor,
@@ -212,7 +309,55 @@ export function deriveMatchReport(events: MatchEvent[], playerIds: string[] = []
   };
 }
 
+export function calculateMatchStats(
+  events: MatchEvent[],
+  playerIds: string[] = [],
+  context?: MatchReportContext,
+): MatchReport {
+  return deriveMatchReport(events, playerIds, context);
+}
+
+export function calculatePeriodStats(
+  events: MatchEvent[],
+  period: 1 | 2,
+  playerIds: string[] = [],
+  context?: Omit<MatchReportContext, "period">,
+): MatchReport {
+  return deriveMatchReport(events, playerIds, context ? { ...context, period } : { starterIds: [], matchEnd: { period, matchTimeMs: 0 }, period });
+}
+
+export function calculateStats(query: StatsQuery): MatchReport {
+  return deriveMatchReport(query.events, query.playerIds ?? [], query.context ? { ...query.context, period: query.period ?? query.context.period } : query.period ? { starterIds: [], matchEnd: { period: query.period, matchTimeMs: 0 }, period: query.period } : undefined);
+}
+
+export function calculatePlayerStats(args: {
+  events: MatchEvent[];
+  playerId: string;
+  period?: 1 | 2;
+  context?: MatchReportContext;
+}): PlayerStats {
+  const report = deriveMatchReport(args.events, [args.playerId], args.context ? { ...args.context, period: args.period ?? args.context.period } : args.period ? { starterIds: [], matchEnd: { period: args.period, matchTimeMs: 0 }, period: args.period } : undefined);
+  return report.players[0] ?? emptyPlayerStats(args.playerId);
+}
+
 export function deriveScore(events: MatchEvent[]): { for: number; against: number } {
   const report = deriveMatchReport(events);
   return { for: report.scoreFor, against: report.scoreAgainst };
+}
+
+export function getScoreForPeriod(events: MatchEvent[], period: 1 | 2): { for: number; against: number } {
+  return deriveScore(eventsForPeriod(events, period));
+}
+
+export function getFullTimeScore(events: MatchEvent[]): { for: number; against: number } {
+  return deriveScore(events);
+}
+
+export function getPeriodResult(events: MatchEvent[], period: 1 | 2): PeriodResult {
+  const score = getScoreForPeriod(events, period);
+  return {
+    period,
+    goalsFor: score.for,
+    goalsAgainst: score.against,
+  };
 }

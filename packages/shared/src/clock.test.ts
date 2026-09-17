@@ -52,7 +52,7 @@ describe("MatchClockService", () => {
     expect(restored.running).toBe(true);
   });
 
-  it("transitions periods without resetting accumulated time", () => {
+  it("starts the next period from 00:00", () => {
     const started = startMatch(createInitialClock(), 0);
     const ended = endPeriod(started, 20 * 60 * 1000, 2);
     expect(ended.phase).toBe("HALFTIME");
@@ -63,7 +63,9 @@ describe("MatchClockService", () => {
     const next = startNextPeriod(ended, 25 * 60 * 1000, 2);
     expect(next.phase).toBe("RUNNING");
     expect(next.period).toBe(2);
-    expect(displayedElapsedMs(next, 25 * 60 * 1000)).toBe(20 * 60 * 1000);
+    expect(next.accumulatedMs).toBe(0);
+    expect(displayedElapsedMs(next, 25 * 60 * 1000)).toBe(0);
+    expect(displayedElapsedMs(next, 25 * 60 * 1000 + 8_000)).toBe(8_000);
   });
 
   it("does not treat the display ticker as source of truth", () => {

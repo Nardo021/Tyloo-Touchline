@@ -1,4 +1,4 @@
-import { clockPhaseLabel, deriveScore } from "@tyloo/shared";
+import { clockPhaseLabel, getFullTimeScore, getPeriodResult, resolveMatchPhase, resumePathForPhase } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link } from "react-router-dom";
 import { Button } from "../components/ui/Button";
@@ -21,7 +21,9 @@ export function MatchesPage() {
       ) : (
         <ul className="flex flex-col gap-3">
           {matches.map((match) => {
-            const score = deriveScore(events.filter((event) => event.matchId === match.id));
+            const matchEvents = events.filter((event) => event.matchId === match.id);
+            const score = getFullTimeScore(matchEvents);
+            const ht = getPeriodResult(matchEvents, 1);
             return (
               <li key={match.id} className="rounded-lg border-2 border-border bg-surface p-4">
                 <p className="text-xl font-bold">
@@ -30,10 +32,14 @@ export function MatchesPage() {
                 <p className="font-semibold">
                   {score.for}–{score.against} · {clockPhaseLabel(match.clock.phase, match.clock.period, match.periodCount)}
                 </p>
+                <p className="font-semibold">HT {ht.goalsFor}–{ht.goalsAgainst} · FT {score.for}–{score.against}</p>
                 <p className="text-text-muted">{match.competition}</p>
                 <div className="mt-3 flex flex-wrap gap-3">
-                  <Link to={`/match/${match.id}/live`} className="font-semibold underline">
-                    {match.status === "FINISHED" ? "Open recorder" : "Resume"}
+                  <Link
+                    to={resolveMatchPhase(match) === "FULL_TIME" ? `/match/${match.id}/report` : resumePathForPhase(match.id, resolveMatchPhase(match))}
+                    className="font-semibold underline"
+                  >
+                    {resolveMatchPhase(match) === "FULL_TIME" ? "Match report" : "Resume"}
                   </Link>
                   <Link to={`/match/${match.id}/report`} className="font-semibold underline">
                     Report

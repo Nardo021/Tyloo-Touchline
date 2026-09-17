@@ -1,13 +1,27 @@
-import { DEFAULT_COMPETITION, DEFAULT_PERIOD_COUNT, DEFAULT_PERIOD_LENGTH_MS } from "@tyloo/shared";
+import {
+  DEFAULT_COMPETITION,
+  DEFAULT_PERIOD_COUNT,
+  DEFAULT_PERIOD_LENGTH_MS,
+  MATCH_ON_FIELD_SIZE,
+  MATCH_SQUAD_SIZE,
+  playerShirtLabel,
+  remapSlotsToFormation,
+  validateLineupSlots,
+  validateRuntimeState,
+  type FormationType,
+  type LineupSlot,
+} from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { MatchReadyList } from "../components/MatchReady";
 import { PlayerCard } from "../components/PlayerCard";
 import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Field";
 import { db, defaultAppSettings, getSetting, SETTING_KEYS } from "../db/database";
+import { LineupEditor } from "../features/matches/LineupEditor";
 import { matchService } from "../features/matches/matchService";
+import { presetService } from "../features/presets/presetService";
 import { LocalWriteError } from "../lib/localWrite";
 import { evaluateReadiness, type OfflineReadiness } from "../pwa/offlineReadiness";
 
@@ -28,6 +42,9 @@ export function NewMatchPage() {
   );
   const [squadIds, setSquadIds] = useState<string[]>([]);
   const [starterIds, setStarterIds] = useState<string[]>([]);
+  const [goalkeeperId, setGoalkeeperId] = useState<string | null>(null);
+  const [formation, setFormation] = useState<FormationType>("2-1-2");
+  const [slots, setSlots] = useState<LineupSlot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<OfflineReadiness | null>(null);
 
@@ -39,13 +56,59 @@ export function NewMatchPage() {
   }, [settings]);
 
   useEffect(() => {
-    if (step === 3) {
+    if (players.length > 0 && squadIds.length === 0) {
+      setSquadIds(players.slice(0, MATCH_SQUAD_SIZE).map((player) => player.id));
+    }
+  }, [players, squadIds.length]);
+
+  useEffect(() => {
+    if (step === 5) {
       void evaluateReadiness().then(setReadiness);
     }
   }, [step]);
 
-  function toggle(list: string[], id: string): string[] {
-    return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
+  const squadPlayers = useMemo(
+    () => players.filter((player) => squadIds.includes(player.id)),
+    [players, squadIds],
+  );
+  const benchPlayers = squadPlayers.filter((player) => !starterIds.includes(player.id));
+  const validation = validateRuntimeState({
+    squadPlayerIds: squadIds,
+    onFieldPlayerIds: starterIds,
+    goalkeeperId,
+  });
+  const formationValidation = validateLineupSlots(formation, slots, starterIds, goalkeeperId);
+
+  function toggleSquad(id: string) {
+    setSquadIds((current) => {
+      if (current.includes(id)) {
+        const next = current.filter((item) => item !== id);
+        setStarterIds((starters) => starters.filter((item) => item !== id && next.includes(item)));
+        if (goalkeeperId === id) {
+          setGoalkeeperId(null);
+        }
+        return next;
+      }
+      if (current.length >= MATCH_SQUAD_SIZE) {
+        return current;
+      }
+      return [...current, id];
+    });
+  }
+
+  function toggleStarter(id: string) {
+    setStarterIds((current) => {
+      if (current.includes(id)) {
+        if (goalkeeperId === id) {
+          setGoalkeeperId(null);
+        }
+        return current.filter((item) => item !== id);
+      }
+      if (current.length >= MATCH_ON_FIELD_SIZE) {
+        return current;
+      }
+      return [...current, id];
+    });
   }
 
   async function createMatch(event: FormEvent) {
@@ -54,14 +117,14 @@ export function NewMatchPage() {
       setError("Enter the opponent name.");
       return;
     }
-    if (squadIds.length === 0) {
-      setError("Select at least one player for the squad.");
-      setStep(2);
-      return;
-    }
-    if (starterIds.length === 0) {
-      setError("Select the starting lineup.");
-      setStep(3);
+    if (!validation.ok || !goalkeeperId || !formationValidation.ok) {
+      setError(
+        !validation.ok
+          ? (validation.errors[0] ?? "The lineup is not valid.")
+          : !goalkeeperId
+            ? "Select the starting goalkeeper."
+            : (formationValidation.ok ? "The formation is not valid." : formationValidation.errors[0] ?? "The formation is not valid."),
+      );
       return;
     }
     try {
@@ -73,6 +136,9 @@ export function NewMatchPage() {
         periodLengthMs: periodMinutes * 60 * 1000,
         squadIds,
         starterIds,
+        goalkeeperId,
+        formation,
+        slots,
       });
       navigate(`/match/${match.id}/live`);
     } catch (err) {
@@ -117,19 +183,17 @@ export function NewMatchPage() {
             onClick={() => {
               setError(null);
               setStep(2);
-              if (squadIds.length === 0) {
-                setSquadIds(players.map((player) => player.id));
-              }
             }}
           >
-            Next: squad
+            Next: match lineup
           </Button>
         </div>
       ) : null}
 
       {step === 2 ? (
         <div className="flex flex-col gap-4">
-          <h2 className="text-2xl font-bold">Squad</h2>
+          <h2 className="text-2xl font-bold">Match lineup</h2>
+          <p>Tyloo FC matches use 8 squad players. The current active squad is preselected.</p>
           {players.length === 0 ? (
             <p>
               No active players yet. Add players on the{" "}
@@ -139,27 +203,29 @@ export function NewMatchPage() {
               first.
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               {players.map((player) => (
                 <PlayerCard
                   key={player.id}
                   player={player}
                   selected={squadIds.includes(player.id)}
-                  onSelect={() => setSquadIds(toggle(squadIds, player.id))}
+                  onSelect={() => toggleSquad(player.id)}
                 />
               ))}
             </div>
           )}
+          <p className="font-bold">{squadIds.length} / {MATCH_SQUAD_SIZE} selected</p>
           <div className="flex gap-3">
             <Button onClick={() => setStep(1)}>Back</Button>
             <Button
               variant="primary"
+              disabled={squadIds.length !== MATCH_SQUAD_SIZE}
               onClick={() => {
                 setStarterIds((current) => current.filter((id) => squadIds.includes(id)));
                 setStep(3);
               }}
             >
-              Next: starting lineup
+              Next: select 6 starters
             </Button>
           </div>
         </div>
@@ -167,18 +233,62 @@ export function NewMatchPage() {
 
       {step === 3 ? (
         <div className="flex flex-col gap-4">
-          <h2 className="text-2xl font-bold">Starting lineup</h2>
-          <p>These players start on the field. Everyone else in the squad sits on the bench.</p>
+          <h2 className="text-2xl font-bold">Select 6 starters</h2>
+          <p className="font-bold">{starterIds.length} / {MATCH_ON_FIELD_SIZE} selected</p>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-            {players
-              .filter((player) => squadIds.includes(player.id))
+            {squadPlayers.map((player) => (
+              <PlayerCard
+                key={player.id}
+                player={player}
+                selected={starterIds.includes(player.id)}
+                onSelect={() => toggleStarter(player.id)}
+              />
+            ))}
+          </div>
+          <section className="rounded-lg border-2 border-border bg-surface p-4">
+            <h3 className="text-lg font-bold uppercase tracking-wide">Bench</h3>
+            <p className="mt-2 text-lg font-semibold">
+              {benchPlayers.length === 0
+                ? "The two unselected squad players sit on the bench."
+                : benchPlayers.map((player) => playerShirtLabel(player)).join(" · ")}
+            </p>
+          </section>
+          <div className="flex gap-3">
+            <Button onClick={() => setStep(2)}>Back</Button>
+            <Button
+              variant="primary"
+              disabled={starterIds.length !== MATCH_ON_FIELD_SIZE}
+              onClick={() => {
+                if (goalkeeperId && !starterIds.includes(goalkeeperId)) {
+                  setGoalkeeperId(null);
+                }
+                setStep(4);
+              }}
+            >
+              Next: starting goalkeeper
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === 4 ? (
+        <div className="flex flex-col gap-4">
+          <h2 className="text-2xl font-bold">Starting goalkeeper</h2>
+          <p>Only the six starting players can be goalkeeper. This is a match role, not a permanent position.</p>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {squadPlayers
+              .filter((player) => starterIds.includes(player.id))
               .map((player) => (
-                <PlayerCard
-                  key={player.id}
-                  player={player}
-                  selected={starterIds.includes(player.id)}
-                  onSelect={() => setStarterIds(toggle(starterIds, player.id))}
-                />
+                <label key={player.id} className="flex min-h-14 items-center gap-3 rounded-lg border-2 border-border bg-surface px-3">
+                  <input
+                    type="radio"
+                    name="starting-gk"
+                    checked={goalkeeperId === player.id}
+                    onChange={() => setGoalkeeperId(player.id)}
+                    className="size-5"
+                  />
+                  <span className="text-lg font-semibold">{playerShirtLabel(player)}</span>
+                </label>
               ))}
           </div>
           <section className="rounded-lg border-2 border-border bg-surface p-4">
@@ -188,9 +298,46 @@ export function NewMatchPage() {
             </div>
           </section>
           <div className="flex gap-3">
-            <Button onClick={() => setStep(2)}>Back</Button>
-            <Button variant="primary" type="submit" disabled={Boolean(readiness && !readiness.canStartMatch)}>
-              Start match setup
+            <Button onClick={() => setStep(3)}>Back</Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                const defaults = presetService.defaultSlots(1, squadPlayers);
+                const nextSlots = defaults.slots.every((slot) => starterIds.includes(slot.playerId))
+                  ? defaults.slots
+                  : remapSlotsToFormation(defaults.slots, defaults.formation, starterIds, goalkeeperId ?? "");
+                setFormation(defaults.formation);
+                setSlots(nextSlots);
+                setStep(5);
+              }}
+            >
+              Next: first-half formation
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === 5 ? (
+        <div className="flex flex-col gap-4">
+          <h2 className="text-2xl font-bold">First-half formation</h2>
+          <p>Default Tyloo preset is 2-1-2. You can change the six roles before kick-off.</p>
+          <LineupEditor
+            formation={formation}
+            slots={slots}
+            onField={squadPlayers.filter((player) => starterIds.includes(player.id))}
+            onChange={(nextFormation, nextSlots) => {
+              setFormation(nextFormation);
+              setSlots(nextSlots);
+            }}
+          />
+          <div className="flex gap-3">
+            <Button onClick={() => setStep(4)}>Back</Button>
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={!validation.ok || !formationValidation.ok || Boolean(readiness && !readiness.canStartMatch)}
+            >
+              Open match
             </Button>
           </div>
         </div>

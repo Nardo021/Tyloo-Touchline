@@ -1,4 +1,4 @@
-import { clockPhaseLabel, deriveScore, formatMatchTime } from "@tyloo/shared";
+import { clockPhaseLabel, deriveScore, formatMatchTime, resolveMatchPhase, resumePathForPhase } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -13,8 +13,7 @@ export function HomePage() {
   const events = useLiveQuery(() => db.events.toArray(), []) ?? [];
   const settings = useLiveQuery(() => getSetting(SETTING_KEYS.appSettings, defaultAppSettings()), []);
   const [readiness, setReadiness] = useState<OfflineReadiness | null>(null);
-  const active = matches.find((match) => match.status !== "FINISHED" && match.status !== "NOT_STARTED")
-    ?? matches.find((match) => match.status !== "FINISHED");
+  const active = matches.find((match) => resolveMatchPhase(match) !== "FULL_TIME" && match.status !== "FINISHED");
   const elapsed = useClockDisplay(active?.clock);
 
   useEffect(() => {
@@ -41,9 +40,16 @@ export function HomePage() {
             {" · "}
             <span className="tabular-nums">{formatMatchTime(elapsed)}</span>
           </p>
-          <Link to={`/match/${active.id}/live`} className="mt-4 inline-block">
+          {resolveMatchPhase(active) === "HALF_TIME" ? (
+            <p className="mt-1 text-lg font-semibold">First half complete.</p>
+          ) : null}
+          <Link to={resumePathForPhase(active.id, resolveMatchPhase(active))} className="mt-4 inline-block">
             <Button variant="primary" className="min-h-14 px-8 text-xl">
-              Resume match
+              {resolveMatchPhase(active) === "HALF_TIME"
+                ? "Continue second-half setup"
+                : resolveMatchPhase(active) === "PRE_MATCH"
+                  ? "Open match"
+                  : "Resume match"}
             </Button>
           </Link>
         </section>

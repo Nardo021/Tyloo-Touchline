@@ -1,16 +1,17 @@
 import {
-  applySubstitutionToSquad,
   createId,
   displayedElapsedMs,
   EVENT_LABELS,
-  revertSubstitutionOnSquad,
+  isLineupEvent,
   type EventType,
+  type LineupSlot,
   type MatchEvent,
   type PlayerEventType,
 } from "@tyloo/shared";
 import { db } from "../../db/database";
 import { getDeviceId } from "../../lib/device";
 import { toLocalWriteError } from "../../lib/localWrite";
+import { lineupService, type LineupMutationResult } from "../matches/lineupService";
 
 export interface RecordPlayerInput {
   matchId: string;
@@ -34,26 +35,33 @@ export class EventService {
     return complete;
   }
 
-  async recordSubstitution(matchId: string, playerOffId: string, playerOnId: string): Promise<MatchEvent> {
-    const event = await this.buildBase(matchId, "SUBSTITUTION");
-    const complete: MatchEvent = {
-      ...event,
-      type: "SUBSTITUTION",
-      playerId: null,
-      playerOffId,
-      playerOnId,
-    };
-    const roster = await db.matchPlayers.where("matchId").equals(matchId).toArray();
-    const next = applySubstitutionToSquad(roster, playerOffId, playerOnId, complete.createdAt);
-    try {
-      await db.transaction("rw", db.events, db.matchPlayers, async () => {
-        await db.events.put(complete);
-        await db.matchPlayers.bulkPut(next);
-      });
-    } catch (error) {
-      throw toLocalWriteError(error, "The substitution was not written to this iPad.");
+  async recordSubstitution(
+    matchId: string,
+    playerOffId: string,
+    playerOnId: string,
+    nextGoalkeeperId?: string,
+    nextSlots?: LineupSlot[],
+  ): Promise<MatchEvent> {
+    const result = await lineupService.recordSubstitution(matchId, playerOffId, playerOnId, nextGoalkeeperId, nextSlots);
+    const substitution = result.events.find((event) => event.type === "SUBSTITUTION");
+    if (!substitution) {
+      throw toLocalWriteError(new Error("missing-sub"), "The substitution was not written to this iPad.");
     }
-    return complete;
+    return substitution;
+  }
+
+  async recordSubstitutionGroup(
+    matchId: string,
+    playerOffId: string,
+    playerOnId: string,
+    nextGoalkeeperId?: string,
+    nextSlots?: LineupSlot[],
+  ): Promise<LineupMutationResult> {
+    return lineupService.recordSubstitution(matchId, playerOffId, playerOnId, nextGoalkeeperId, nextSlots);
+  }
+
+  async recordGoalkeeperChange(matchId: string, newGoalkeeperId: string): Promise<LineupMutationResult> {
+    return lineupService.recordGoalkeeperChange(matchId, newGoalkeeperId);
   }
 
   async voidEvent(eventId: string): Promise<MatchEvent | null> {
@@ -61,16 +69,15 @@ export class EventService {
     if (!event || event.status === "VOIDED") {
       return event ?? null;
     }
+    if (isLineupEvent(event)) {
+      const voided = await lineupService.voidIfLatestLineupChange(event);
+      if (voided.length > 0) {
+        return voided.find((item) => item.id === eventId) ?? voided[0] ?? null;
+      }
+    }
     const updated: MatchEvent = { ...event, status: "VOIDED", updatedAt: Date.now() };
     try {
-      await db.transaction("rw", db.events, db.matchPlayers, async () => {
-        await db.events.put(updated);
-        if (event.type === "SUBSTITUTION") {
-          const roster = await db.matchPlayers.where("matchId").equals(event.matchId).toArray();
-          const next = revertSubstitutionOnSquad(roster, event.playerOffId, event.playerOnId, updated.updatedAt);
-          await db.matchPlayers.bulkPut(next);
-        }
-      });
+      await db.events.put(updated);
     } catch (error) {
       throw toLocalWriteError(error, "The event could not be voided on this iPad.");
     }
@@ -79,7 +86,7 @@ export class EventService {
 
   async listRecent(matchId: string, limit = 5): Promise<MatchEvent[]> {
     const events = await db.events.where("matchId").equals(matchId).reverse().sortBy("createdAt");
-    return events.filter((event) => event.status === "ACTIVE").slice(0, limit);
+    return events.filter((item) => item.status === "ACTIVE").slice(0, limit);
   }
 
   async listAll(matchId: string): Promise<MatchEvent[]> {
@@ -92,7 +99,16 @@ export class EventService {
       return `${EVENT_LABELS.GOAL} — ${playerName(event.playerId)}${assist}`;
     }
     if (event.type === "SUBSTITUTION") {
-      return `SUB — ${playerName(event.playerOnId)} ON / ${playerName(event.playerOffId)} OFF`;
+      return `SUB — ${playerName(event.playerOffId)} OFF / ${playerName(event.playerOnId)} ON`;
+    }
+    if (event.type === "GOALKEEPER_CHANGE") {
+      return `GK CHANGE — ${playerName(event.previousGoalkeeperId)} → ${playerName(event.newGoalkeeperId)}`;
+    }
+    if (event.type === "FORMATION_CHANGE") {
+      return `FORMATION — ${event.previousFormation} → ${event.newFormation}`;
+    }
+    if (event.type === "LINEUP_CHANGE") {
+      return `LINEUP — ${event.formation}`;
     }
     const player = "playerId" in event ? playerName(event.playerId) : "";
     return player ? `${EVENT_LABELS[event.type]} — ${player}` : EVENT_LABELS[event.type];

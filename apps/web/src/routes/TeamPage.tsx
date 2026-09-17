@@ -1,3 +1,4 @@
+import { playerShirtLabel } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useState, type FormEvent } from "react";
 import { Button } from "../components/ui/Button";
@@ -14,7 +15,6 @@ export function TeamPage() {
   }, []) ?? [];
   const [number, setNumber] = useState("");
   const [name, setName] = useState("");
-  const [position, setPosition] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,12 +29,10 @@ export function TeamPage() {
         id: editingId ?? undefined,
         number: Number(number),
         name,
-        position: position || null,
         active: true,
       });
       setNumber("");
       setName("");
-      setPosition("");
       setEditingId(null);
     } catch (err) {
       const write = err instanceof LocalWriteError ? err : null;
@@ -46,18 +44,15 @@ export function TeamPage() {
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-3xl font-bold">Team</h1>
-      <p>Add shirt numbers and names. No player accounts are required.</p>
+      <p>Add shirt numbers and names. Goalkeeper is a match role, not a permanent player setting.</p>
       {error ? <p className="font-semibold text-danger" role="alert">{error}</p> : null}
 
-      <form className="grid max-w-3xl gap-4 md:grid-cols-4" onSubmit={(event) => void onSave(event)}>
+      <form className="grid max-w-3xl gap-4 md:grid-cols-3" onSubmit={(event) => void onSave(event)}>
         <Field label="Number" htmlFor="number">
           <Input id="number" inputMode="numeric" value={number} onChange={(event) => setNumber(event.target.value)} />
         </Field>
         <Field label="Name" htmlFor="name">
           <Input id="name" value={name} onChange={(event) => setName(event.target.value)} />
-        </Field>
-        <Field label="Position (optional)" htmlFor="position">
-          <Input id="position" value={position} onChange={(event) => setPosition(event.target.value)} />
         </Field>
         <div className="flex items-end">
           <Button variant="primary" type="submit" className="w-full">
@@ -67,14 +62,13 @@ export function TeamPage() {
       </form>
 
       {players.length === 0 ? (
-        <p>No players yet. Add Leo, Maxwell, and the rest of the squad here.</p>
+        <p>No players yet. A new install seeds the current Tyloo FC squad automatically.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {players.map((player) => (
             <li key={player.id} className="flex flex-wrap items-center justify-between gap-3 border-2 border-border bg-surface px-4 py-3">
               <p className="text-xl font-bold">
-                <span className="tabular-nums">{player.number}</span> {player.name}
-                {player.position ? <span className="ms-2 text-base font-semibold text-text-muted">{player.position}</span> : null}
+                {playerShirtLabel(player)}
                 {!player.active ? <span className="ms-2 text-base">Inactive</span> : null}
               </p>
               <div className="flex gap-2">
@@ -83,7 +77,6 @@ export function TeamPage() {
                     setEditingId(player.id);
                     setNumber(String(player.number));
                     setName(player.name);
-                    setPosition(player.position ?? "");
                   }}
                 >
                   Edit
@@ -95,7 +88,6 @@ export function TeamPage() {
                         id: player.id,
                         number: player.number,
                         name: player.name,
-                        position: player.position,
                         active: !player.active,
                       });
                     } catch (err) {

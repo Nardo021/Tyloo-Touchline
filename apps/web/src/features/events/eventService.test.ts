@@ -58,8 +58,15 @@ describe("EventService", () => {
     await setDeviceName("Test");
     await db.settings.put({ key: "deviceId", value: createId() });
     await db.players.bulkPut([player(leoId, 11, "Leo"), player(maxId, 7, "Maxwell")]);
-    await db.matches.put(match());
+    await db.matches.put({ ...match(), startingGoalkeeperId: leoId });
     await db.matchPlayers.bulkPut([assignment(leoId, true), assignment(maxId, false)]);
+    await db.matchRuntimeStates.put({
+      matchId,
+      onFieldPlayerIds: [leoId],
+      goalkeeperId: leoId,
+      period: 1,
+      updatedAt: 1,
+    });
   });
 
   afterEach(async () => {
@@ -104,7 +111,7 @@ describe("EventService", () => {
   });
 
   it("updates on-field players after a substitution in one transaction", async () => {
-    await eventService.recordSubstitution(matchId, leoId, maxId);
+    await eventService.recordSubstitution(matchId, leoId, maxId, maxId);
     const roster = await db.matchPlayers.where("matchId").equals(matchId).toArray();
     expect(roster.find((item) => item.playerId === leoId)?.onField).toBe(false);
     expect(roster.find((item) => item.playerId === maxId)?.onField).toBe(true);

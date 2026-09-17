@@ -2,6 +2,8 @@ import {
   DEFAULT_PERIOD_COUNT,
   DEFAULT_PERIOD_LENGTH_MS,
   DEFAULT_TEAM_ID,
+  isCompletePreset,
+  type FormationPreset,
   type TouchlineBackup,
 } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -11,6 +13,8 @@ import { Dialog } from "../components/ui/Dialog";
 import { Field, Input } from "../components/ui/Field";
 import { db, defaultAppSettings, getAppSettings, SETTING_KEYS, setSetting } from "../db/database";
 import { backupService, daysSince, downloadTextFile, type BackupSummary } from "../features/backup/backupService";
+import { LineupEditor } from "../features/matches/LineupEditor";
+import { presetService } from "../features/presets/presetService";
 import { storageService, type StorageEstimateInfo } from "../features/storage/storageService";
 import { APP_VERSION } from "../lib/appVersion";
 import { getDeviceName, setDeviceName } from "../lib/device";
@@ -31,6 +35,13 @@ export function SettingsPage() {
   const [persistState, setPersistState] = useState<string>("");
   const [backupError, setBackupError] = useState<string | null>(null);
   const [pendingBackup, setPendingBackup] = useState<{ backup: TouchlineBackup; summary: BackupSummary } | null>(null);
+  const [editingPreset, setEditingPreset] = useState<FormationPreset | null>(null);
+  const [presetSaved, setPresetSaved] = useState(false);
+  const players = useLiveQuery(async () => {
+    const all = await db.players.toArray();
+    return all.filter((player) => player.active).sort((a, b) => a.number - b.number);
+  }, []) ?? [];
+  const presets = useLiveQuery(() => presetService.list(), []) ?? [];
   const fileRef = useRef<HTMLInputElement>(null);
 
   useLiveQuery(async () => {
@@ -149,6 +160,60 @@ export function SettingsPage() {
         </Button>
         {saved ? <p role="status">Settings saved on this iPad.</p> : null}
       </form>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-2xl font-bold">Lineup presets</h2>
+        <p>These are starting suggestions only. Any player can play any role in a match.</p>
+        {presets.map((preset) => (
+          <article key={preset.id} className="rounded-lg border-2 border-border bg-surface p-4">
+            <h3 className="text-xl font-bold">{preset.half === 1 ? "First half" : "Second half"}</h3>
+            <p className="mt-1 font-semibold">{preset.formation}</p>
+            <p className="text-text-muted">{isCompletePreset(preset) ? "Complete" : "Forward not configured yet"}</p>
+            <Button className="mt-3" onClick={() => setEditingPreset(preset)}>
+              Edit preset
+            </Button>
+          </article>
+        ))}
+        {editingPreset ? (
+          <div className="rounded-lg border-2 border-primary bg-surface p-4">
+            <h3 className="text-xl font-bold">Edit {editingPreset.half === 1 ? "first-half" : "second-half"} preset</h3>
+            <LineupEditor
+              formation={editingPreset.formation}
+              slots={presetService.slotsForPlayers(editingPreset, players)}
+              onField={players.filter((player) => presetService.slotsForPlayers(editingPreset, players).some((slot) => slot.playerId === player.id))}
+              candidates={players}
+              onChange={(formation, slots) => {
+                setEditingPreset({
+                  ...editingPreset,
+                  formation,
+                  slots: slots.map((slot) => ({
+                    slotId: slot.slotId,
+                    role: slot.role,
+                    order: slot.order,
+                    playerId: slot.playerId || null,
+                    playerNumber: players.find((player) => player.id === slot.playerId)?.number ?? null,
+                  })),
+                });
+              }}
+            />
+            <div className="mt-3 flex gap-3">
+              <Button onClick={() => setEditingPreset(null)}>Cancel</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  void presetService.save(editingPreset).then(() => {
+                    setPresetSaved(true);
+                    setEditingPreset(null);
+                  });
+                }}
+              >
+                Save preset
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {presetSaved ? <p role="status">Lineup preset saved on this iPad.</p> : null}
+      </section>
 
       <section className="flex flex-col gap-3">
         <h2 className="text-2xl font-bold">Data</h2>

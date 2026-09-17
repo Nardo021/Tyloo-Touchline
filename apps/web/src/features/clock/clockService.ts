@@ -3,7 +3,8 @@ import {
   createId,
   createInitialClock,
   displayedElapsedMs,
-  matchStatusFromClock,
+  matchPhaseFromClock,
+  matchStatusFromPhase,
   type ClockTransitionKind,
   type Match,
   type MatchClockState,
@@ -38,7 +39,8 @@ export class MatchClockService {
       ...extra,
       clock,
       currentPeriod: clock.period,
-      status: matchStatusFromClock(clock.phase),
+      phase: extra.phase ?? matchPhaseFromClock(clock.phase, clock.period),
+      status: extra.status ?? matchStatusFromPhase(extra.phase ?? matchPhaseFromClock(clock.phase, clock.period), clock.phase),
       updatedAt: Date.now(),
     };
     try {
@@ -65,12 +67,14 @@ export class MatchClockService {
     if (kind === "END_MATCH") {
       extra.finishedAt = now;
     }
+    const phase = extra.phase ?? matchPhaseFromClock(clock.phase, clock.period);
     const next: Match = {
       ...match,
       ...extra,
       clock,
       currentPeriod: clock.period,
-      status: matchStatusFromClock(clock.phase),
+      phase,
+      status: matchStatusFromPhase(phase, clock.phase),
       updatedAt: now,
     };
     const controlEvent = await this.buildControlEvent(next, kind, now);

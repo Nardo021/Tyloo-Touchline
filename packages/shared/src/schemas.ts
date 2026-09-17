@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { CLOCK_PHASES } from "./clock.js";
 import { EVENT_STATUSES, EVENT_TYPES } from "./events.js";
+import { CLOCK_MODES, FORMATION_TYPES, TACTICAL_ROLES } from "./formation.js";
 import { MATCH_STATUSES } from "./models.js";
+import { MATCH_PHASES } from "./phase.js";
 
 export const clockStateSchema = z.object({
   running: z.boolean(),
@@ -30,6 +32,7 @@ export const playerSchema = z.object({
   number: z.number().int().min(0).max(99),
   name: z.string().trim().min(1).max(80),
   position: z.string().trim().max(32).nullable(),
+  preferredRoles: z.array(z.enum(TACTICAL_ROLES)).nullable().optional(),
   active: z.boolean(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
@@ -42,6 +45,10 @@ export const matchSchema = z.object({
   competition: z.string().trim().min(1).max(80),
   date: z.string().min(8).max(32),
   status: z.enum(MATCH_STATUSES),
+  phase: z.enum(MATCH_PHASES).optional(),
+  clockMode: z.enum(CLOCK_MODES).optional(),
+  startingFormation: z.enum(FORMATION_TYPES).nullable().optional(),
+  periodDurationsMs: z.array(z.number().int().nonnegative()).optional(),
   periodCount: z.number().int().min(1).max(8),
   periodLengthMs: z.number().int().min(60_000).max(3_600_000),
   currentPeriod: z.number().int().min(1).max(8),
@@ -50,6 +57,58 @@ export const matchSchema = z.object({
   updatedAt: z.number().int(),
   startedAt: z.number().int().nullable(),
   finishedAt: z.number().int().nullable(),
+  startingGoalkeeperId: z.string().uuid().nullable().optional(),
+});
+
+export const matchRuntimeStateSchema = z.object({
+  matchId: z.string().uuid(),
+  onFieldPlayerIds: z.array(z.string().uuid()),
+  goalkeeperId: z.string(),
+  period: z.number().int().positive(),
+  formationSnapshotId: z.string().optional(),
+  updatedAt: z.number().int(),
+});
+
+export const lineupSlotSchema = z.object({
+  slotId: z.string().min(1),
+  role: z.enum(TACTICAL_ROLES),
+  playerId: z.string(),
+  order: z.number().int().nonnegative(),
+});
+
+export const formationSnapshotSchema = z.object({
+  id: z.string().uuid(),
+  matchId: z.string().uuid(),
+  period: z.number().int().positive(),
+  formation: z.enum(FORMATION_TYPES),
+  effectiveMatchTimeMs: z.number().int().nonnegative(),
+  slots: z.array(lineupSlotSchema),
+  createdAt: z.number().int(),
+});
+
+export const formationPresetSchema = z.object({
+  id: z.string().uuid(),
+  half: z.union([z.literal(1), z.literal(2)]),
+  name: z.string().min(1),
+  formation: z.enum(FORMATION_TYPES),
+  slots: z.array(z.object({
+    slotId: z.string().min(1),
+    role: z.enum(TACTICAL_ROLES),
+    order: z.number().int().nonnegative(),
+    playerId: z.string().uuid().nullable(),
+    playerNumber: z.number().int().min(0).max(99).nullable(),
+  })),
+  updatedAt: z.number().int(),
+});
+
+export const lineupDraftSchema = z.object({
+  matchId: z.string().uuid(),
+  purpose: z.enum(["PRE_MATCH", "HALF_TIME"]),
+  formation: z.enum(FORMATION_TYPES),
+  slots: z.array(lineupSlotSchema),
+  onFieldPlayerIds: z.array(z.string().uuid()),
+  goalkeeperId: z.string(),
+  updatedAt: z.number().int(),
 });
 
 export const matchPlayerSchema = z.object({
@@ -95,6 +154,30 @@ export const matchEventSchema = z.discriminatedUnion("type", [
     playerId: z.null(),
     playerOffId: z.string().uuid(),
     playerOnId: z.string().uuid(),
+  }),
+  z.object({
+    ...baseEventFields,
+    type: z.literal("GOALKEEPER_CHANGE"),
+    playerId: z.null(),
+    previousGoalkeeperId: z.string().uuid(),
+    newGoalkeeperId: z.string().uuid(),
+  }),
+  z.object({
+    ...baseEventFields,
+    type: z.literal("FORMATION_CHANGE"),
+    playerId: z.null(),
+    previousFormation: z.string().min(1),
+    newFormation: z.string().min(1),
+    previousSnapshotId: z.string(),
+    newSnapshotId: z.string().uuid(),
+  }),
+  z.object({
+    ...baseEventFields,
+    type: z.literal("LINEUP_CHANGE"),
+    playerId: z.null(),
+    formation: z.string().min(1),
+    previousSnapshotId: z.string(),
+    newSnapshotId: z.string().uuid(),
   }),
   z.object({
     ...baseEventFields,

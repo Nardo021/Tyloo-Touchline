@@ -19,6 +19,9 @@ export const EVENT_LABELS: Record<EventType, string> = {
   CORNER_AGAINST: "Opponent corner",
   GOAL_AGAINST: "Opponent goal",
   SUBSTITUTION: "Substitution",
+  GOALKEEPER_CHANGE: "GK change",
+  FORMATION_CHANGE: "Formation change",
+  LINEUP_CHANGE: "Lineup change",
   MATCH_START: "Match started",
   MATCH_PAUSE: "Paused",
   MATCH_RESUME: "Resumed",
@@ -45,11 +48,14 @@ export const EVENT_BUTTON_LABELS: Record<EventType, string> = {
   CORNER_AGAINST: "OPP CORNER",
   GOAL_AGAINST: "OPP GOAL",
   SUBSTITUTION: "SUBSTITUTION",
-  MATCH_START: "START MATCH",
+  GOALKEEPER_CHANGE: "CHANGE GK",
+  FORMATION_CHANGE: "CHANGE LINEUP",
+  LINEUP_CHANGE: "CHANGE LINEUP",
+  MATCH_START: "START FIRST HALF",
   MATCH_PAUSE: "PAUSE",
   MATCH_RESUME: "RESUME",
-  PERIOD_END: "END PERIOD",
-  PERIOD_START: "START NEXT PERIOD",
+  PERIOD_END: "END FIRST HALF",
+  PERIOD_START: "START SECOND HALF",
   MATCH_END: "END MATCH",
 };
 
@@ -58,6 +64,17 @@ export function periodLabel(period: number, periodCount: number): string {
     return period === 1 ? "First half" : "Second half";
   }
   return `Period ${period}`;
+}
+
+export function periodHeading(period: number, periodCount: number): string {
+  if (periodCount === 2) {
+    return period === 1 ? "FIRST HALF" : "SECOND HALF";
+  }
+  return `PERIOD ${period}`;
+}
+
+export function formatPeriodEventTime(period: number, matchTimeMs: number, periodCount = 2): string {
+  return `${periodLabel(period, periodCount)} · ${formatMatchTime(matchTimeMs)}`;
 }
 
 export function clockPhaseLabel(phase: ClockPhase, period: number, periodCount: number): string {
@@ -77,6 +94,10 @@ export function clockPhaseLabel(phase: ClockPhase, period: number, periodCount: 
       return _exhaustive;
     }
   }
+}
+
+export function playerShirtLabel(player: { number: number; name: string }): string {
+  return `${player.number} ${player.name}`;
 }
 
 export function formatMatchTime(matchTimeMs: number): string {

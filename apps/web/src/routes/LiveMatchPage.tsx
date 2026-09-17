@@ -4,17 +4,24 @@ import {
   canPause,
   canResume,
   canStart,
-  canStartNextPeriod,
-  clockPhaseLabel,
+  emptySlots,
   formatMatchTime,
+  formatPeriodEventTime,
+  periodHeading,
+  playerShirtLabel,
+  remapSlotsToFormation,
+  resolveMatchPhase,
   RECENT_EVENT_LIMIT,
   UNDO_WINDOW_MS,
+  validateLiveRuntimeState,
+  type FormationType,
+  type LineupSlot,
   type MatchEvent,
   type Player,
   type PlayerEventType,
 } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { MatchReadyList } from "../components/MatchReady";
 import { PlayerCard } from "../components/PlayerCard";
@@ -26,8 +33,13 @@ import { Dialog } from "../components/ui/Dialog";
 import { db, getAppSettings, getSetting, SETTING_KEYS, setSetting } from "../db/database";
 import { clockService } from "../features/clock/clockService";
 import { eventService } from "../features/events/eventService";
+import { ChangeGoalkeeperView } from "../features/matches/ChangeGoalkeeperView";
+import { ChangeLineupView } from "../features/matches/ChangeLineupView";
+import { LineupOverlay } from "../features/matches/LineupOverlay";
 import { PlayerEventView } from "../features/matches/PlayerEventView";
 import { SubstitutionView } from "../features/matches/SubstitutionView";
+import { lifecycleService } from "../features/matches/lifecycleService";
+import { lineupService } from "../features/matches/lineupService";
 import { markStorageUnavailable } from "../features/storage/storageHealth";
 import { useAppRecovery } from "../hooks/useAppRecovery";
 import { useClockDisplay } from "../hooks/useClockDisplay";
@@ -36,7 +48,7 @@ import { useWakeLock } from "../hooks/useWakeLock";
 import { LocalWriteError } from "../lib/localWrite";
 import { evaluateReadiness, type OfflineReadiness } from "../pwa/offlineReadiness";
 
-type Overlay = "none" | "player" | "sub" | "corner";
+type Overlay = "none" | "player" | "sub" | "gk" | "corner" | "lineup";
 
 export function LiveMatchPage() {
   const { id } = useParams<{ id: string }>();
@@ -45,21 +57,30 @@ export function LiveMatchPage() {
   const events = useLiveQuery(() => (id ? db.events.where("matchId").equals(id).toArray() : []), [id]) ?? [];
   const players = useLiveQuery(() => db.players.toArray(), []) ?? [];
   const assignments = useLiveQuery(() => (id ? db.matchPlayers.where("matchId").equals(id).toArray() : []), [id]) ?? [];
+  const runtime = useLiveQuery(() => (id ? db.matchRuntimeStates.get(id) : undefined), [id]);
+  const snapshot = useLiveQuery(
+    () => (runtime?.formationSnapshotId ? db.formationSnapshots.get(runtime.formationSnapshotId) : undefined),
+    [runtime?.formationSnapshotId],
+  );
+  const preMatchDraft = useLiveQuery(() => (id ? db.lineupDrafts.get(id) : undefined), [id]);
   const settings = useLiveQuery(() => getAppSettings(), []);
   const helpSeen = useLiveQuery(() => getSetting(SETTING_KEYS.helpSeen, false), []);
   const updateAvailable = useUpdateAvailability();
 
   const [overlay, setOverlay] = useState<Overlay>("none");
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
-  const [benchOpen, setBenchOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [confirm, setConfirm] = useState<"end" | "reset" | "delete" | null>(null);
+  const [confirm, setConfirm] = useState<"end-half" | "end" | "reset" | "delete" | null>(null);
+  const [lineupOpen, setLineupOpen] = useState(false);
+  const [editFormation, setEditFormation] = useState<FormationType>("2-1-2");
+  const [editSlots, setEditSlots] = useState<LineupSlot[]>([]);
   const [toast, setToast] = useState<{ event: MatchEvent; until: number } | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [retryAction, setRetryAction] = useState<(() => Promise<void>) | null>(null);
   const [helpDismissed, setHelpDismissed] = useState(false);
   const [readiness, setReadiness] = useState<OfflineReadiness | null>(null);
+  const skipCompletedRedirect = useRef(false);
 
   const elapsed = useClockDisplay(match?.clock);
   const keepAwake = settings?.keepAwake ?? true;
@@ -67,21 +88,25 @@ export function LiveMatchPage() {
   useAppRecovery(match?.clock.running ?? false);
 
   const playerById = useMemo(() => new Map(players.map((player) => [player.id, player])), [players]);
-  const onField = assignments
-    .filter((item) => item.onField)
-    .map((item) => playerById.get(item.playerId))
-    .filter((player): player is Player => Boolean(player))
-    .sort((a, b) => a.number - b.number);
+  const onFieldIds = runtime?.onFieldPlayerIds ?? assignments.filter((item) => item.onField).map((item) => item.playerId);
+  const onField = onFieldIds
+    .map((playerId) => playerById.get(playerId))
+    .filter((player): player is Player => Boolean(player));
   const bench = assignments
-    .filter((item) => !item.onField)
+    .filter((item) => !onFieldIds.includes(item.playerId))
     .map((item) => playerById.get(item.playerId))
     .filter((player): player is Player => Boolean(player))
     .sort((a, b) => a.number - b.number);
-
+  const goalkeeperId = runtime?.goalkeeperId || null;
   const activeEvents = events.filter((event) => event.status === "ACTIVE");
   const scoreFor = activeEvents.filter((event) => event.type === "GOAL").length;
   const scoreAgainst = activeEvents.filter((event) => event.type === "GOAL_AGAINST" || event.type === "OWN_GOAL").length;
   const recent = [...activeEvents].sort((a, b) => b.createdAt - a.createdAt).slice(0, RECENT_EVENT_LIMIT);
+  const lineupValid = validateLiveRuntimeState({
+    squadPlayerIds: assignments.map((item) => item.playerId),
+    onFieldPlayerIds: onFieldIds,
+    goalkeeperId,
+  }).ok;
 
   useEffect(() => {
     if (!toast) {
@@ -105,6 +130,19 @@ export function LiveMatchPage() {
     }
   }, [match?.status]);
 
+  useEffect(() => {
+    if (!match || !id) {
+      return;
+    }
+    const phase = resolveMatchPhase(match);
+    if (phase === "HALF_TIME") {
+      navigate(`/match/${id}/summary/1`, { replace: true });
+    }
+    if (phase === "FULL_TIME" && !skipCompletedRedirect.current) {
+      navigate(`/match/${id}/report`, { replace: true });
+    }
+  }, [id, match, navigate]);
+
   if (!id) {
     return <p>Match not found on this device.</p>;
   }
@@ -123,8 +161,13 @@ export function LiveMatchPage() {
   }
 
   const currentMatch = match;
-  const nameOf = (playerId: string | null) =>
-    playerId ? (playerById.get(playerId)?.name ?? "Unknown player") : "Team";
+  const nameOf = (playerId: string | null) => {
+    if (!playerId) {
+      return "Team";
+    }
+    const player = playerById.get(playerId);
+    return player ? playerShirtLabel(player) : "Unknown player";
+  };
 
   async function afterSave(event: MatchEvent) {
     setOverlay("none");
@@ -169,6 +212,7 @@ export function LiveMatchPage() {
       <PlayerEventView
         player={selectedPlayer}
         teammates={onField}
+        isGoalkeeper={selectedPlayer.id === goalkeeperId}
         onCancel={() => {
           setOverlay("none");
           setSelectedPlayer(null);
@@ -183,16 +227,89 @@ export function LiveMatchPage() {
       <SubstitutionView
         onField={onField}
         bench={bench}
+        goalkeeperId={goalkeeperId}
+        matchTimeMs={elapsed}
         onCancel={() => setOverlay("none")}
-        onSave={async (playerOffId, playerOnId) => {
+        formation={snapshot?.formation}
+        slots={snapshot?.slots}
+        onSave={async (playerOffId, playerOnId, nextGoalkeeperId, nextSlots) => {
           await runWrite(async () => {
-            const event = await eventService.recordSubstitution(currentMatch.id, playerOffId, playerOnId);
-            await afterSave(event);
+            const result = await eventService.recordSubstitutionGroup(
+              currentMatch.id,
+              playerOffId,
+              playerOnId,
+              nextGoalkeeperId,
+              nextSlots,
+            );
+            const primary = result.events[0];
+            if (primary) {
+              await afterSave(primary);
+            }
           }, "The substitution was not written to this iPad.");
         }}
       />
     );
   }
+
+  if (overlay === "gk") {
+    return (
+      <ChangeGoalkeeperView
+        onField={onField}
+        goalkeeperId={goalkeeperId}
+        onCancel={() => setOverlay("none")}
+        onSave={async (newGoalkeeperId) => {
+          await runWrite(async () => {
+            if (!goalkeeperId) {
+              await lineupService.assignMissingGoalkeeper(currentMatch.id, newGoalkeeperId);
+              setOverlay("none");
+              setSavedFlash("Goalkeeper set");
+              return;
+            }
+            const result = await eventService.recordGoalkeeperChange(currentMatch.id, newGoalkeeperId);
+            const primary = result.events[0];
+            if (primary) {
+              await afterSave(primary);
+            }
+          }, "The goalkeeper change was not written to this iPad.");
+        }}
+      />
+    );
+  }
+
+  if (overlay === "lineup") {
+    return (
+      <ChangeLineupView
+        formation={editFormation}
+        slots={editSlots}
+        onField={onField}
+        onChange={(nextFormation, nextSlots) => {
+          setEditFormation(nextFormation);
+          setEditSlots(nextSlots);
+        }}
+        onCancel={() => setOverlay("none")}
+        onSave={() => {
+          void runWrite(async () => {
+            const result = await lifecycleService.changeLineup({
+              matchId: currentMatch.id,
+              formation: editFormation,
+              slots: editSlots,
+            });
+            setOverlay("none");
+            const primary = result.events[0];
+            if (primary) {
+              await afterSave(primary);
+            } else {
+              setSavedFlash("Lineup updated");
+            }
+          }, "The lineup change was not written to this iPad.");
+        }}
+      />
+    );
+  }
+
+  const phase = resolveMatchPhase(match);
+  const formationLabel = snapshot?.formation ?? preMatchDraft?.formation ?? match.startingFormation ?? "—";
+  const periodActionLabel = phase === "SECOND_HALF" || match.clock.period > 1 ? "End match" : "End first half";
 
   return (
     <div className="flex min-h-dvh flex-col overflow-x-hidden bg-background text-text">
@@ -202,16 +319,22 @@ export function LiveMatchPage() {
         <div className="flex items-start justify-between gap-3 px-[max(1rem,env(safe-area-inset-left))] py-3 pe-[max(1rem,env(safe-area-inset-right))]">
           <div>
             <p className="text-xl font-bold md:text-2xl">{settings?.teamName ?? "Tyloo FC"}</p>
-            <p className="text-sm font-semibold uppercase tracking-wide text-text-muted">
-              {clockPhaseLabel(match.clock.phase, match.clock.period, match.periodCount)}
+            <p className="text-sm font-semibold uppercase tracking-wide">{periodHeading(match.clock.period, match.periodCount)}</p>
+            <p className="text-5xl font-bold leading-none tabular-nums md:text-6xl" aria-live="polite" aria-atomic="true">
+              {formatMatchTime(elapsed)}
             </p>
           </div>
-          <p className="text-5xl font-bold leading-none tabular-nums md:text-6xl" aria-live="polite" aria-atomic="true">
-            {formatMatchTime(elapsed)}
-          </p>
-          <p className="text-4xl font-bold tabular-nums md:text-5xl" aria-label={`Score ${scoreFor} to ${scoreAgainst}`}>
-            {scoreFor} — {scoreAgainst}
-          </p>
+          <div className="text-right">
+            <p className="text-4xl font-bold tabular-nums md:text-5xl" aria-label={`Score ${scoreFor} to ${scoreAgainst}`}>
+              {scoreFor} — {scoreAgainst}
+            </p>
+            <Button
+              className="mt-2 min-h-11"
+              onClick={() => setLineupOpen(true)}
+            >
+              {formationLabel} · View lineup
+            </Button>
+          </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-[max(1rem,env(safe-area-inset-left))] py-2 pe-[max(1rem,env(safe-area-inset-right))] text-sm font-semibold">
           <p>
@@ -224,11 +347,20 @@ export function LiveMatchPage() {
             {canStart(match.clock) ? (
               <Button
                 variant="primary"
+                disabled={!lineupValid}
                 onClick={() => void runWrite(async () => {
-                  await clockService.transition(currentMatch.id, "START");
-                }, "The match could not be started on this iPad.")}
+                  const draft = preMatchDraft;
+                  const slots = draft?.slots ?? snapshot?.slots ?? emptySlots(draft?.formation ?? "2-1-2");
+                  await lifecycleService.startFirstHalf({
+                    matchId: currentMatch.id,
+                    formation: draft?.formation ?? snapshot?.formation ?? match.startingFormation ?? "2-1-2",
+                    slots: slots.every((slot) => slot.playerId)
+                      ? slots
+                      : remapSlotsToFormation(slots, draft?.formation ?? "2-1-2", onFieldIds, goalkeeperId ?? ""),
+                  });
+                }, "The first half could not be started on this iPad.")}
               >
-                Start match
+                Start first half
               </Button>
             ) : null}
             {canPause(match.clock) ? (
@@ -243,17 +375,11 @@ export function LiveMatchPage() {
                 Resume
               </Button>
             ) : null}
-            {canEndPeriod(match.clock) ? (
-              <Button onClick={() => void runWrite(async () => {
-                await clockService.transition(currentMatch.id, "END_PERIOD");
-              }, "The period could not be ended on this iPad.")}>End period</Button>
+            {canEndPeriod(match.clock) && phase === "FIRST_HALF" ? (
+              <Button variant="warning" onClick={() => setConfirm("end-half")}>{periodActionLabel}</Button>
             ) : null}
-            {canStartNextPeriod(match.clock, match.periodCount) ? (
-              <Button variant="primary" onClick={() => void runWrite(async () => {
-                await clockService.transition(currentMatch.id, "START_NEXT_PERIOD");
-              }, "The next period could not be started on this iPad.")}>
-                Start next period
-              </Button>
+            {canEndMatch(match.clock) && phase === "SECOND_HALF" ? (
+              <Button variant="warning" onClick={() => setConfirm("end")}>{periodActionLabel}</Button>
             ) : null}
             <Button aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>
               More
@@ -262,7 +388,7 @@ export function LiveMatchPage() {
         </div>
         {menuOpen ? (
           <div className="flex flex-wrap gap-2 border-t border-border bg-background px-4 py-3" role="menu">
-            {canEndMatch(match.clock) ? (
+            {canEndMatch(match.clock) && phase === "SECOND_HALF" ? (
               <Button variant="danger" onClick={() => setConfirm("end")}>
                 End match
               </Button>
@@ -287,18 +413,35 @@ export function LiveMatchPage() {
             <div className="mt-3">
               <MatchReadyList readiness={readiness} />
             </div>
+            {!lineupValid ? (
+              <p className="mt-3 font-semibold">
+                Select a starting goalkeeper and confirm 6 on-field players before kick-off.
+              </p>
+            ) : null}
           </section>
         ) : null}
+
+        {!goalkeeperId ? (
+          <section className="mb-6 rounded-lg border-2 border-warning bg-surface p-4">
+            <h2 className="text-xl font-bold">Select the current goalkeeper</h2>
+            <p className="mt-2">This match does not yet have a goalkeeper role assigned.</p>
+            <Button className="mt-3" variant="primary" onClick={() => setOverlay("gk")}>
+              Choose goalkeeper
+            </Button>
+          </section>
+        ) : null}
+
         <section>
           <h2 className="mb-3 text-lg font-bold uppercase tracking-wide">On field</h2>
           {onField.length === 0 ? (
             <p>No players are on the field. Add a squad from match setup.</p>
           ) : (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
               {onField.map((player) => (
                 <PlayerCard
                   key={player.id}
                   player={player}
+                  isGoalkeeper={player.id === goalkeeperId}
                   onSelect={() => {
                     setSelectedPlayer(player);
                     setOverlay("player");
@@ -310,32 +453,21 @@ export function LiveMatchPage() {
         </section>
 
         <section className="mt-6">
-          <button
-            type="button"
-            className="mb-3 text-lg font-bold uppercase tracking-wide underline"
-            aria-expanded={benchOpen}
-            onClick={() => setBenchOpen((value) => !value)}
-          >
-            Bench {benchOpen ? "hide" : "show"}
-          </button>
-          {benchOpen ? (
-            bench.length === 0 ? (
-              <p>No bench players in this squad.</p>
-            ) : (
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                {bench.map((player) => (
-                  <PlayerCard
-                    key={player.id}
-                    player={player}
-                    onSelect={() => {
-                      setSelectedPlayer(player);
-                      setOverlay("player");
-                    }}
-                  />
-                ))}
-              </div>
-            )
-          ) : null}
+          <h2 className="mb-3 text-lg font-bold uppercase tracking-wide text-text-muted">Bench</h2>
+          {bench.length === 0 ? (
+            <p>No bench players in this squad.</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-2">
+              {bench.map((player) => (
+                <PlayerCard
+                  key={player.id}
+                  player={player}
+                  compact
+                  onSelect={() => setOverlay("sub")}
+                />
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="mt-6">
@@ -344,17 +476,31 @@ export function LiveMatchPage() {
             <Button className="min-h-16 text-lg" onClick={() => setOverlay("corner")}>
               Corner
             </Button>
-            <Button
-              className="min-h-16 text-lg"
-              onClick={() => void runWrite(async () => {
-                const event = await eventService.recordTeamEvent(currentMatch.id, "GOAL_AGAINST");
-                await afterSave(event);
-              })}
-            >
-              Opp goal
-            </Button>
             <Button className="min-h-16 text-lg" onClick={() => setOverlay("sub")}>
               Substitution
+            </Button>
+            <Button
+              className="min-h-16 text-lg"
+              onClick={() => {
+                setEditFormation(snapshot?.formation ?? preMatchDraft?.formation ?? "2-1-2");
+                setEditSlots(
+                  snapshot?.slots
+                  ?? preMatchDraft?.slots
+                  ?? remapSlotsToFormation(emptySlots("2-1-2"), "2-1-2", onFieldIds, goalkeeperId ?? ""),
+                );
+                setOverlay("lineup");
+              }}
+            >
+              Change lineup
+            </Button>
+            <Button className="min-h-16 text-lg" onClick={() => setOverlay("gk")}>
+              Change GK
+            </Button>
+            <Button className="min-h-16 text-lg" onClick={() => void runWrite(async () => {
+              const event = await eventService.recordTeamEvent(currentMatch.id, "GOAL_AGAINST");
+              await afterSave(event);
+            })}>
+              Opp goal
             </Button>
           </div>
         </section>
@@ -373,7 +519,7 @@ export function LiveMatchPage() {
               {recent.map((event) => (
                 <li key={event.id} className="rounded-md border-2 border-border bg-surface px-3 py-2">
                   <p className="font-semibold">
-                    <span className="tabular-nums">{formatMatchTime(event.matchTimeMs)}</span>{" "}
+                    <span className="tabular-nums">{formatPeriodEventTime(event.period, event.matchTimeMs, currentMatch.periodCount)}</span>{" "}
                     {eventService.describe(event, nameOf)}
                   </p>
                 </li>
@@ -465,20 +611,58 @@ export function LiveMatchPage() {
         </div>
       </Dialog>
 
+      <LineupOverlay
+        open={lineupOpen}
+        formation={formationLabel}
+        snapshot={snapshot ?? null}
+        players={players}
+        onClose={() => setLineupOpen(false)}
+        onChangeLineup={phase === "FIRST_HALF" || phase === "SECOND_HALF" ? () => {
+          setLineupOpen(false);
+          setEditFormation(snapshot?.formation ?? "2-1-2");
+          setEditSlots(snapshot?.slots ?? emptySlots("2-1-2"));
+          setOverlay("lineup");
+        } : undefined}
+      />
+
       <Dialog
-        open={confirm === "end"}
-        title="End this match?"
+        open={confirm === "end-half"}
+        title="End the first half?"
         onClose={() => setConfirm(null)}
       >
-        <p>This stops the clock and closes match recording.</p>
+        <p>Current time: {formatMatchTime(elapsed)}</p>
         <div className="mt-4 flex gap-3">
-          <Button onClick={() => setConfirm(null)}>Keep recording</Button>
+          <Button onClick={() => setConfirm(null)}>Cancel</Button>
           <Button
             variant="danger"
             onClick={() => void runWrite(async () => {
-              await clockService.transition(currentMatch.id, "END_MATCH");
+              await lifecycleService.endFirstHalf(currentMatch.id);
               setConfirm(null);
-              navigate(`/match/${currentMatch.id}/report`);
+              navigate(`/match/${currentMatch.id}/summary/1`);
+            }, "The first half could not be ended on this iPad.")}
+          >
+            End first half
+          </Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={confirm === "end"}
+        title="Finish the match?"
+        onClose={() => setConfirm(null)}
+      >
+        <p>End second half and finish match.</p>
+        <p className="mt-2 font-semibold">Second half: {formatMatchTime(elapsed)}</p>
+        <p className="font-semibold">Score: {settings?.teamName ?? "Tyloo FC"} {scoreFor}–{scoreAgainst} {currentMatch.opponent}</p>
+        <div className="mt-4 flex gap-3">
+          <Button onClick={() => setConfirm(null)}>Cancel</Button>
+          <Button
+            variant="danger"
+            onClick={() => void runWrite(async () => {
+              skipCompletedRedirect.current = true;
+              await lifecycleService.endMatch(currentMatch.id);
+              setConfirm(null);
+              navigate(`/match/${currentMatch.id}/summary/2`);
             }, "The match could not be ended on this iPad.")}
           >
             End match
@@ -511,11 +695,11 @@ export function LiveMatchPage() {
         }}
       >
         <ol className="flex list-decimal flex-col gap-2 ps-5">
-          <li>Tap a player</li>
+          <li>Tap an on-field player</li>
           <li>Select what happened</li>
           <li>Tap Save</li>
         </ol>
-        <p className="mt-3">Team events are available below the players.</p>
+        <p className="mt-3">Use Substitution and Change GK below the players when the lineup changes.</p>
         <Button
           className="mt-4 w-full"
           variant="primary"

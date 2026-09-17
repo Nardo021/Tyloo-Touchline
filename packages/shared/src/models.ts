@@ -1,5 +1,7 @@
 import type { ClockPhase, MatchClockState } from "./clock.js";
 import type { EventStatus, EventType, MatchEvent } from "./events.js";
+import type { ClockMode, FormationType, TacticalRole } from "./formation.js";
+import type { MatchPhase } from "./phase.js";
 
 export const MATCH_STATUSES = [
   "NOT_STARTED",
@@ -25,6 +27,7 @@ export interface Player {
   number: number;
   name: string;
   position: string | null;
+  preferredRoles?: TacticalRole[] | null;
   active: boolean;
   createdAt: number;
   updatedAt: number;
@@ -37,6 +40,10 @@ export interface Match {
   competition: string;
   date: string;
   status: MatchStatus;
+  phase?: MatchPhase;
+  clockMode?: ClockMode;
+  startingFormation?: FormationType | null;
+  periodDurationsMs?: number[];
   periodCount: number;
   periodLengthMs: number;
   currentPeriod: number;
@@ -45,6 +52,16 @@ export interface Match {
   updatedAt: number;
   startedAt: number | null;
   finishedAt: number | null;
+  startingGoalkeeperId?: string | null;
+}
+
+export interface MatchRuntimeState {
+  matchId: string;
+  onFieldPlayerIds: string[];
+  goalkeeperId: string;
+  period: number;
+  formationSnapshotId?: string;
+  updatedAt: number;
 }
 
 export interface MatchPlayer {
@@ -138,6 +155,12 @@ export function eventTouchesPlayer(event: MatchEvent, playerId: string): boolean
   if (event.type === "SUBSTITUTION") {
     return event.playerOffId === playerId || event.playerOnId === playerId;
   }
+  if (event.type === "GOALKEEPER_CHANGE") {
+    return event.previousGoalkeeperId === playerId || event.newGoalkeeperId === playerId;
+  }
+  if (event.type === "FORMATION_CHANGE" || event.type === "LINEUP_CHANGE") {
+    return false;
+  }
   return false;
 }
 
@@ -161,6 +184,21 @@ export function summarizeEvent(event: MatchEvent): {
         status: event.status,
         playerId: event.playerOffId,
         relatedPlayerId: event.playerOnId,
+      };
+    case "GOALKEEPER_CHANGE":
+      return {
+        type: event.type,
+        status: event.status,
+        playerId: event.previousGoalkeeperId,
+        relatedPlayerId: event.newGoalkeeperId,
+      };
+    case "FORMATION_CHANGE":
+    case "LINEUP_CHANGE":
+      return {
+        type: event.type,
+        status: event.status,
+        playerId: null,
+        relatedPlayerId: null,
       };
     case "ASSIST":
     case "SHOT":

@@ -1,4 +1,4 @@
-import { EVENT_LABELS, formatMatchTime } from "@tyloo/shared";
+import { EVENT_LABELS, formatPeriodEventTime } from "@tyloo/shared";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -32,7 +32,7 @@ export function TimelinePage() {
           {events.map((event) => (
             <li key={event.id} className="rounded-lg border-2 border-border bg-surface p-4">
               <p className="font-bold">
-                <span className="tabular-nums">{formatMatchTime(event.matchTimeMs)}</span> · {EVENT_LABELS[event.type]}
+                <span className="tabular-nums">{formatPeriodEventTime(event.period, event.matchTimeMs, match.periodCount)}</span> · {EVENT_LABELS[event.type]}
               </p>
               <p>{eventService.describe(event, nameOf)}</p>
               <p className="text-sm text-text-muted">

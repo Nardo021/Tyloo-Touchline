@@ -39,6 +39,10 @@ export class BackupService {
       matchPlayers,
       events,
       clockStates,
+      matchRuntimeStates,
+      formationSnapshots,
+      formationPresets,
+      lineupDrafts,
     ] = await Promise.all([
       getAppSettings(),
       db.teams.toArray(),
@@ -47,6 +51,10 @@ export class BackupService {
       db.matchPlayers.toArray(),
       db.events.toArray(),
       db.clockStates.toArray(),
+      db.matchRuntimeStates.toArray(),
+      db.formationSnapshots.toArray(),
+      db.formationPresets.toArray(),
+      db.lineupDrafts.toArray(),
     ]);
 
     const backup: TouchlineBackup = {
@@ -62,6 +70,10 @@ export class BackupService {
         matchPlayers,
         events,
         clockStates,
+        matchRuntimeStates,
+        formationSnapshots,
+        formationPresets,
+        lineupDrafts,
       },
     };
 
@@ -93,6 +105,10 @@ export class BackupService {
           db.matchPlayers.clear(),
           db.events.clear(),
           db.clockStates.clear(),
+          db.matchRuntimeStates.clear(),
+          db.formationSnapshots.clear(),
+          db.formationPresets.clear(),
+          db.lineupDrafts.clear(),
         ]);
         if (backup.data.teams.length) {
           await db.teams.bulkPut(backup.data.teams);
@@ -112,6 +128,18 @@ export class BackupService {
         if (backup.data.clockStates.length) {
           await db.clockStates.bulkPut(backup.data.clockStates);
         }
+        if (backup.data.matchRuntimeStates.length) {
+          await db.matchRuntimeStates.bulkPut(backup.data.matchRuntimeStates);
+        }
+        if (backup.data.formationSnapshots.length) {
+          await db.formationSnapshots.bulkPut(backup.data.formationSnapshots);
+        }
+        if (backup.data.formationPresets.length) {
+          await db.formationPresets.bulkPut(backup.data.formationPresets);
+        }
+        if (backup.data.lineupDrafts.length) {
+          await db.lineupDrafts.bulkPut(backup.data.lineupDrafts);
+        }
         await setSetting(SETTING_KEYS.appSettings, {
           ...defaultAppSettings(),
           ...backup.data.settings,
@@ -128,10 +156,12 @@ export class BackupService {
     if (!match) {
       return null;
     }
-    const [matchPlayers, events, clockState] = await Promise.all([
+    const [matchPlayers, events, clockState, matchRuntimeState, formationSnapshots] = await Promise.all([
       db.matchPlayers.where("matchId").equals(matchId).toArray(),
       db.events.where("matchId").equals(matchId).toArray(),
       db.clockStates.get(matchId),
+      db.matchRuntimeStates.get(matchId),
+      db.formationSnapshots.where("matchId").equals(matchId).toArray(),
     ]);
     const playerIds = [...new Set(matchPlayers.map((item) => item.playerId))];
     const players = (await db.players.bulkGet(playerIds)).filter((player): player is Player => Boolean(player));
@@ -145,6 +175,8 @@ export class BackupService {
       matchPlayers,
       events,
       clockState: clockState ?? null,
+      matchRuntimeState: matchRuntimeState ?? null,
+      formationSnapshots,
     };
     const safeOpponent = match.opponent.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
     const filename = `touchline-match-${match.date}-${safeOpponent || "match"}.json`;
@@ -197,6 +229,12 @@ function eventMetadata(event: MatchEvent, players: Map<string, Player>): string 
       return event.assistPlayerId ? `assist:${players.get(event.assistPlayerId)?.name ?? event.assistPlayerId}` : "";
     case "SUBSTITUTION":
       return `off:${players.get(event.playerOffId)?.name ?? event.playerOffId};on:${players.get(event.playerOnId)?.name ?? event.playerOnId}`;
+    case "GOALKEEPER_CHANGE":
+      return `${players.get(event.previousGoalkeeperId)?.name ?? event.previousGoalkeeperId}→${players.get(event.newGoalkeeperId)?.name ?? event.newGoalkeeperId}`;
+    case "FORMATION_CHANGE":
+      return `${event.previousFormation}→${event.newFormation}`;
+    case "LINEUP_CHANGE":
+      return event.formation;
     case "ASSIST":
     case "SHOT":
     case "SHOT_ON_TARGET":

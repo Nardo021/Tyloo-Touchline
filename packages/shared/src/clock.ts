@@ -110,7 +110,7 @@ export function startNextPeriod(clock: MatchClockState, now: number, periodCount
   }
   return {
     running: true,
-    accumulatedMs: displayedElapsedMs(clock, now),
+    accumulatedMs: 0,
     lastStartedAt: now,
     period: clock.period + 1,
     phase: "RUNNING",

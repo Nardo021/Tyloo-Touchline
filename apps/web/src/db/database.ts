@@ -1,11 +1,18 @@
 import {
   DEFAULT_TEAM_ID,
   DEFAULT_TEAM_NAME,
+  defaultFirstHalfPreset,
+  defaultSecondHalfPreset,
+  matchPhaseFromClock,
   type AppSettings,
   type ClockStateRecord,
+  type FormationPreset,
+  type FormationSnapshot,
+  type LineupDraft,
   type Match,
   type MatchEvent,
   type MatchPlayer,
+  type MatchRuntimeState,
   type Player,
   type Team,
 } from "@tyloo/shared";
@@ -27,6 +34,10 @@ export class TylooDatabase extends Dexie {
   matchPlayers!: Table<MatchPlayer, [string, string]>;
   events!: Table<MatchEvent, string>;
   clockStates!: Table<ClockStateRecord, string>;
+  matchRuntimeStates!: Table<MatchRuntimeState, string>;
+  formationSnapshots!: Table<FormationSnapshot, string>;
+  formationPresets!: Table<FormationPreset, string>;
+  lineupDrafts!: Table<LineupDraft, string>;
   settings!: Table<SettingRecord, string>;
   teams!: Table<Team, string>;
   appMetadata!: Table<MetadataRecord, string>;
@@ -73,6 +84,76 @@ export class TylooDatabase extends Dexie {
         const metadata = transaction.table("appMetadata");
         await metadata.put({ key: METADATA_KEYS.schemaVersion, value: 2 });
         await metadata.put({ key: METADATA_KEYS.migratedAt, value: now });
+      });
+
+    this.version(3)
+      .stores({
+        matchRuntimeStates: "matchId, updatedAt",
+      })
+      .upgrade(async (transaction) => {
+        const now = Date.now();
+        const matches = (await transaction.table("matches").toArray()) as Array<{
+          id: string;
+          currentPeriod?: number;
+          startingGoalkeeperId?: string | null;
+        }>;
+        const matchPlayers = transaction.table("matchPlayers");
+        const runtimes = transaction.table("matchRuntimeStates");
+        for (const match of matches) {
+          const existing = await runtimes.get(match.id);
+          if (existing) {
+            continue;
+          }
+          const roster = (await matchPlayers.where("matchId").equals(match.id).toArray()) as MatchPlayer[];
+          await runtimes.put({
+            matchId: match.id,
+            onFieldPlayerIds: roster.filter((player) => player.onField).map((player) => player.playerId),
+            goalkeeperId: match.startingGoalkeeperId ?? "",
+            period: match.currentPeriod ?? 1,
+            updatedAt: now,
+          } satisfies MatchRuntimeState);
+        }
+        await transaction.table("appMetadata").put({ key: METADATA_KEYS.schemaVersion, value: 3 });
+        await transaction.table("appMetadata").put({ key: METADATA_KEYS.migratedAt, value: now });
+      });
+
+    this.version(4)
+      .stores({
+        formationSnapshots: "id, matchId, period, createdAt",
+        formationPresets: "id, half, updatedAt",
+        lineupDrafts: "matchId, purpose, updatedAt",
+      })
+      .upgrade(async (transaction) => {
+        const now = Date.now();
+        const matches = (await transaction.table("matches").toArray()) as Match[];
+        for (const match of matches) {
+          if (match.phase && match.clockMode) {
+            continue;
+          }
+          await transaction.table("matches").put({
+            ...match,
+            phase: match.phase ?? matchPhaseFromClock(match.clock.phase, match.clock.period),
+            clockMode: match.clockMode ?? "cumulative",
+            periodDurationsMs: match.periodDurationsMs ?? [],
+            updatedAt: now,
+          } satisfies Match);
+        }
+        const runtimes = (await transaction.table("matchRuntimeStates").toArray()) as MatchRuntimeState[];
+        for (const runtime of runtimes) {
+          if (runtime.formationSnapshotId !== undefined) {
+            continue;
+          }
+          await transaction.table("matchRuntimeStates").put({
+            ...runtime,
+            formationSnapshotId: "",
+          } satisfies MatchRuntimeState);
+        }
+        const presets = transaction.table("formationPresets");
+        if ((await presets.count()) === 0) {
+          await presets.bulkPut([defaultFirstHalfPreset(now), defaultSecondHalfPreset(now)]);
+        }
+        await transaction.table("appMetadata").put({ key: METADATA_KEYS.schemaVersion, value: 4 });
+        await transaction.table("appMetadata").put({ key: METADATA_KEYS.migratedAt, value: now });
       });
   }
 }

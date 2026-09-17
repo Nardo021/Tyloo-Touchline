@@ -45,6 +45,7 @@ function validBackup() {
       matchPlayers: [],
       events: [],
       clockStates: [],
+      matchRuntimeStates: [],
     },
   };
 }
@@ -75,6 +76,48 @@ describe("Touchline backup validation", () => {
 
   it("rejects malformed JSON text", () => {
     expect(parseTouchlineBackupJson("{not json")).toEqual({ ok: false, reason: "not-json" });
+  });
+
+  it("migrates a version 1 backup and derives runtime snapshots", () => {
+    const legacy = validBackup();
+    legacy.version = 1;
+    delete (legacy.data as { matchRuntimeStates?: unknown }).matchRuntimeStates;
+    legacy.data.matches = [
+      {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        teamId: DEFAULT_TEAM_ID,
+        opponent: "Northside",
+        competition: "NSFA Summer",
+        date: "2026-09-17",
+        status: "FINISHED",
+        periodCount: 2,
+        periodLengthMs: 1_200_000,
+        currentPeriod: 2,
+        clock: { running: false, accumulatedMs: 1000, lastStartedAt: null, period: 2, phase: "FINISHED" },
+        createdAt: 1,
+        updatedAt: 1,
+        startedAt: 1,
+        finishedAt: 2,
+      },
+    ];
+    legacy.data.matchPlayers = [
+      {
+        matchId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        playerId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        starter: true,
+        onField: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const result = validateTouchlineBackup(legacy);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.backup.version).toBe(BACKUP_VERSION);
+      expect(result.backup.data.matchRuntimeStates[0]?.onFieldPlayerIds).toEqual([
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      ]);
+    }
   });
 
   it("rejects a backup missing required collections", () => {
